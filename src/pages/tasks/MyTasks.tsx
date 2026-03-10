@@ -1,22 +1,27 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Clock, AlertCircle, Eye, MessageSquare, Send, Paperclip, Link as LinkIcon, Smile, Image as ImageIcon } from 'lucide-react';
-import type { Task } from '../../types/index';
 import { useTaskFilters } from '../../hooks/useTaskFilters';
 import { useTaskGrouping } from '../../hooks/useTaskGrouping';
 import TaskControls from './TaskControls';
 import TaskCard from './TaskCard';
 import ViewModal from '../../components/ViewModal';
 import FilterModal from '../../components/FilterModal';
-import { getUrgencyColor, getUrgencyText } from '../../Data/tasksData';
+import { getUrgencyColor } from '../../Data/tasksData';
 import GanttChart from './GanttChart';
 import type { HoursReport } from '../hoursReport/HoursReportModal';
 import HoursReportModal from '../hoursReport/HoursReportModal';
+import type { SystemTable, TaskReview } from '../../Data/projectsData';
+import { getTaskPriorities, getTaskStatuses, updateStatusAsync, getMyTasks } from '../../services/taskService';
+import ChatModal from './ChatModal';
+import authService from '../../services/authService';
 
 interface MyTasksProps {
-  tasks: Task[];
-  onTaskUpdate: (updatedTask: Task) => void;
-  onTasksUpdate: (tasks: Task[]) => void;
+  tasks: TaskReview[];
+  onTaskUpdate: (updatedTask: TaskReview) => void;
+  onTasksUpdate: (tasks: TaskReview[]) => void;
 }
+
+type StatusKey = 'todo' | 'inProgress' | 'done';
 
 interface ChatMessage {
   id: number;
@@ -33,27 +38,44 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
   const [showViewModal, setShowViewModal] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [activeView, setActiveView] = useState<'all' | 'status' | 'urgency' | 'project' | 'date'>('all');
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [selectedTask, setSelectedTask] = useState<TaskReview | null>(null);
   const [projectSearchQuery, setProjectSearchQuery] = useState('');
   const [showChatModal, setShowChatModal] = useState(false);
-  const [chatTask, setChatTask] = useState<Task | null>(null);
-  const [chatMessage, setChatMessage] = useState('');
-  const [showLinkInput, setShowLinkInput] = useState(false);
-  const [linkUrl, setLinkUrl] = useState('');
+  const [chatTask, setChatTask] = useState<TaskReview | null>(null);
+
   const [hoveredTaskId, setHoveredTaskId] = useState<number | null>(null);
   const [showHoursModal, setShowHoursModal] = useState(false);
-  const [hoursTask, setHoursTask] = useState<Task | null>(null);
+  const [hoursTask, setHoursTask] = useState<TaskReview | null>(null);
+  const [statuses, setStatuses] = useState<SystemTable[]>([]);
+  const [priorities, setPriorities] = useState<SystemTable[]>([]);
 
-  const [messages] = useState<ChatMessage[]>([
-    {
-      id: 1,
-      user: 'Miri Label',
-      avatar: 'ML',
-      message: 'שמתי את שיבא בתואם משרדת כדי מייצב בניקלאוסטוס שלהם',
-      timestamp: 'Jan 1',
-      mentions: ['@Gal Shem-Tov']
-    }
-  ]);
+
+const userId = authService.getCurrentUser()?.id ?? 0;
+
+  const statusKeyFromName = (statusName: string): StatusKey => {
+    const value = statusName.toLowerCase();
+    if (value.includes('done') || value.includes('הושלם') || value.includes('סגור')) return 'done' as const;
+    if (value.includes('progress') || value.includes('בביצוע')) return 'inProgress' as const;
+    return 'todo' as const;
+  };
+
+
+
+  // const urgencyKeyFromName = (urgencyName: string): UrgencyKey => {
+  //   const value = urgencyName.toLowerCase();
+  //   if (value.includes('high') || value.includes('גבוה')) return 'high' as const;
+  //   if (value.includes('medium') || value.includes('בינונית')) return 'medium' as const;
+  //   return 'low' as const;
+  // };
+
+
+  const statusOptions = useMemo(
+    () => statuses.map((status) => ({
+      id: status.id,
+      name: status.name
+    })),
+    [statuses]
+  );
 
   const {
     searchQuery,
@@ -69,24 +91,105 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
 
   const groupedTasks = useTaskGrouping(filteredTasks, activeView);
 
-  const handleTaskStatusChange = (taskId: number, newStatus: 'todo' | 'inProgress' | 'done') => {
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadTasks = async () => {
+      try {
+        const data = await getMyTasks(null, null);
+        if (isMounted) onTasksUpdate(data ?? []);
+      } catch (error) {
+        console.error('Error loading my tasks:', error);
+      }
+    };
+
+    const loadStatuses = async () => {
+      try {
+        const data = await getTaskStatuses();
+        if (isMounted) setStatuses(data ?? []);
+      } catch (error) {
+        console.error('Error loading task statuses:', error);
+        if (isMounted) setStatuses([]);
+      }
+    };
+
+    const loadPriorities = async () => {
+      try {
+        const data = await getTaskPriorities();
+        if (isMounted) setPriorities(data ?? []);
+      } catch (error) {
+        console.error('Error loading task priorities:', error);
+        if (isMounted) setPriorities([]);
+      }
+    };
+
+    loadTasks();
+    loadStatuses();
+    loadPriorities();
+
+    const intervalId = window.setInterval(loadTasks, 30000);
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(intervalId);
+    };
+  }, [onTasksUpdate]);
+
+  const handleTaskStatusChange = async (taskId: number, statusId: number) => {
+    const matchingStatus = statusOptions.find((status) => status.id === statusId);
+    const nextStatusName = matchingStatus?.name ?? '';
+
+    const isTask = tasks.find((task) => task.id === taskId)?.isPlanningSte ?? false;
+    await updateStatusAsync(taskId, statusId, !isTask,false);
+
     const updatedTasks = tasks.map(task =>
       task.id === taskId
-        ? { ...task, status: newStatus, completed: newStatus === 'done' }
+        ? {
+          ...task,
+          statuID: statusId,
+          statusName: nextStatusName || task.statusName,
+          isClosed: statusKeyFromName(nextStatusName || task.statusName) === 'done'
+        }
         : task
     );
     onTasksUpdate(updatedTasks);
   };
 
-  const handleTaskClick = (task: Task) => setSelectedTask(task);
+  const handleTaskUpdateFromCard = async (updatedTask: TaskReview) => {
+    const currentTask = tasks.find(t => t.id === updatedTask.id);
+    const statusChanged = currentTask && currentTask.statuID !== updatedTask.statuID;
 
-  const handleOpenChat = (task: Task, e: React.MouseEvent) => {
+    if (statusChanged) {
+      const matchingStatus = statusOptions.find((status) => status.id === (updatedTask.statuID ?? 0));
+      const nextStatusName = matchingStatus?.name ?? updatedTask.statusName ?? '';
+
+      const isTask = currentTask?.isPlanningSte ?? false;
+      await updateStatusAsync(updatedTask.id, updatedTask.statuID ?? 0, !isTask,false);
+
+      updatedTask = {
+        ...updatedTask,
+        statusName: nextStatusName || updatedTask.statusName,
+        isClosed: statusKeyFromName(nextStatusName || updatedTask.statusName) === 'done'
+      };
+    }
+
+    const updatedTasks = tasks.map(task =>
+      task.id === updatedTask.id ? { ...updatedTask } : task
+    );
+
+    onTasksUpdate(updatedTasks);
+    onTaskUpdate(updatedTask);
+  };
+
+  const handleTaskClick = (task: TaskReview) => setSelectedTask(task);
+
+  const handleOpenChat = (task: TaskReview, e: React.MouseEvent) => {
     e.stopPropagation();
     setChatTask(task);
     setShowChatModal(true);
   };
 
-  const handleOpenHoursReport = (task: Task, e: React.MouseEvent) => {
+  const handleOpenHoursReport = (task: TaskReview, e: React.MouseEvent) => {
     e.stopPropagation();
     setHoursTask(task);
     setShowHoursModal(true);
@@ -96,32 +199,41 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
     console.log('Hours report saved:', report);
   };
 
-  const handleSendInvoiceRequest = (task: Task, e: React.MouseEvent) => {
+  const handleSendInvoiceRequest = (task: TaskReview, e: React.MouseEvent) => {
     e.stopPropagation();
     alert(`שליחת בקשה להגשת חשבון עבור: ${task.subject}`);
   };
-
-  const handleSendMessage = () => {
-    if (chatMessage.trim()) {
-      console.log('Sending message:', chatMessage);
-      setChatMessage('');
+  const handleCloseChat = () => {
+    if (chatTask?.hasChat) {
+      const updatedTasks = tasks.map(t =>
+        t.id === chatTask.id ? { ...t, hasChat: true } : t
+      );
+      onTasksUpdate(updatedTasks);
     }
+    setShowChatModal(false);
+  };
+ 
+  // const getStatusColor = (statusName: string) => {
+  //   const status = statusKeyFromName(statusName);
+  //   if (status === 'done') return 'bg-green-100 text-green-800 border-green-300';
+  //   if (status === 'inProgress') return 'bg-blue-100 text-blue-800 border-blue-300';
+  //   return 'bg-gray-100 text-gray-800 border-gray-300';
+  // };
+const getUrgencyColorByKey = (urgencyId: number) => {
+    const priority = priorities.find(p => p.id === urgencyId);
+    const color = priority?.color ?? '';
+    return color
+      ? ({ color, stroke: color } as React.CSSProperties)
+      : undefined;
   };
 
-  const handleAddLink = () => {
-    if (linkUrl.trim()) {
-      setChatMessage(prev => prev + ' ' + linkUrl);
-      setLinkUrl('');
-      setShowLinkInput(false);
-    }
+   const getStatusColorByKey = (statusId: number) => {
+    const status = statuses.find(s => s.id === statusId);
+    const color = status?.color ?? '';
+   return color
+      ? ({ color, stroke: color } as React.CSSProperties)
+      : undefined;
   };
-
-  const getStatusColor = (status: string) => {
-    if (status === 'done') return 'bg-green-100 text-green-800 border-green-300';
-    if (status === 'inProgress') return 'bg-blue-100 text-blue-800 border-blue-300';
-    return 'bg-gray-100 text-gray-800 border-gray-300';
-  };
-
   return (
     <>
       <TaskControls
@@ -192,7 +304,7 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
                       >
                         {/* תיאור המשימה */}
                         <td className="px-3 py-2">
-                          <span className={`text-xs font-medium ${task.completed ? 'line-through text-gray-400' : 'text-gray-900'} px-1 rounded`}>
+                          <span className={`text-xs font-medium ${task.isClosed ? 'line-through text-gray-400' : 'text-gray-900'} px-1 rounded`}>
                             {task.subject}
                           </span>
                         </td>
@@ -204,67 +316,84 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
                             className="relative p-1.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-all"
                             title="פתח צ'אט"
                           >
-                            <MessageSquare size={14} />
-                            {task.hasUnreadMessages && (
+                              <MessageSquare size={14} />
+                    {(task.hasChat || (chatTask && chatTask.id === task.id && chatTask.hasChat)) && (
+                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-white" />
+                    )}
+                            {/* <MessageSquare size={14} />
+                            {task.hasChat && (
                               <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-white" />
-                            )}
+                            )} */}
                           </button>
                         </td>
 
                         {/* שלב */}
                         <td className="px-3 py-2">
-                          <span className="inline-flex px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">{task.stage}</span>
+                          <span className="inline-flex px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">{task.name}</span>
                         </td>
 
                         {/* נושא תכנון */}
                         <td className="px-3 py-2">
-                          <span className="text-xs text-gray-600">{task.planning}</span>
+                          <span className="text-xs text-gray-600">{task.planningSubjectName}</span>
                         </td>
 
                         {/* פרויקט */}
                         <td className="px-3 py-2">
-                          <span className="text-xs text-gray-600">{task.project}</span>
+                          <span className="text-xs text-gray-600">{task.projectName}</span>
                         </td>
 
                         {/* סטטוס */}
                         <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                          <select
-                            value={task.status}
-                            onChange={(e) => handleTaskStatusChange(task.id, e.target.value as any)}
-                            className={`text-xs font-medium px-2 py-1 rounded-full border cursor-pointer focus:ring-2 focus:ring-emerald-500 ${getStatusColor(task.status)}`}
-                          >
-                            <option value="todo">לביצוע</option>
-                            <option value="inProgress">בביצוע</option>
-                            <option value="done">הושלם</option>
+                           <select
+                            value={String(statusOptions.find((status) => status.name === task.statusName)?.id ?? task.statuID ?? 0)}
+                            onChange={(e) => handleTaskStatusChange(task.id, Number(e.target.value))}
+                            disabled={task.isClosed && task.senderID !== userId}
+                            className="text-xs font-medium px-2 py-1 rounded-full border cursor-pointer focus:ring-2 focus:ring-emerald-500"
+                            style={getStatusColorByKey(task.statuID ?? 0)}
+                           >
+                            {task.statuID === 0 && !statusOptions.some((status) => status.name === task.statusName) && (
+                              <option value="0">{task.statusName}</option>
+                            )}
+                            {statusOptions.map((status) => (
+                              <option key={status.id} value={String(status.id)}>
+                                {status.name}
+                              </option>
+                            ))}
                           </select>
                         </td>
 
                         {/* דחיפות */}
                         <td className="px-3 py-2">
                           <div className="flex items-center gap-1">
-                            <AlertCircle size={12} className={getUrgencyColor(task.urgency)} />
-                            <span className={`text-xs font-medium ${getUrgencyColor(task.urgency)}`}>{getUrgencyText(task.urgency)}</span>
+                           <AlertCircle size={12} style={getUrgencyColorByKey(task.urgencyID)} />
+                            <span className="text-xs font-medium" style={getUrgencyColorByKey(task.urgencyID)}>
+                              {task.urgencyName}
+                            </span>
                           </div>
                         </td>
 
                         {/* שולח */}
                         <td className="px-3 py-2">
-                          <span className="text-xs text-gray-600">{task.sender}</span>
+                          <span className="text-xs text-gray-600">{task.senderName}</span>
                         </td>
 
                         {/* תאריך התחלה */}
                         <td className="px-3 py-2">
                           <div className="flex items-center gap-1">
                             <Clock size={12} className="text-gray-400" />
-                            <span className="text-xs text-gray-600">{task.startDate || task.date || '-'}</span>
+                            <span className="text-xs text-gray-600">
+                            {task.startDate ? new Date(task.startDate).toLocaleDateString('en-GB') : '-'}
+                              </span>
                           </div>
                         </td>
 
                         {/* תאריך סיום */}
                         <td className="px-3 py-2">
                           <div className="flex items-center gap-1">
-                            <Clock size={12} className="text-gray-400" />
-                            <span className="text-xs text-gray-600">{task.endDate || '-'}</span>
+                          <Clock size={12} className="text-gray-400" />
+                          <span className="text-xs text-gray-600">
+                            {task.endDate ? new Date(task.endDate).toLocaleDateString('en-GB') : '-'}
+                          </span>
                           </div>
                         </td>
 
@@ -272,7 +401,7 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
                         <td className="px-3 py-2 text-center">
                           <input
                             type="checkbox"
-                            checked={task.dependsOnStage || false}
+                            checked={task.dependsOnStepID || false}
                             disabled
                             className="w-4 h-4 text-emerald-600 rounded cursor-not-allowed opacity-60"
                           />
@@ -282,11 +411,11 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
                         <td className="px-3 py-2">
                           <div className="flex flex-col items-start gap-0.5">
                             <span className="inline-flex items-center gap-0.5 px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-xs font-medium">
-                              {task.hoursEstimate || 0}h
+                              {task.workHours || 0}h
                             </span>
-                            {task.hoursActual !== undefined && task.hoursActual > 0 && (
+                            {task.hourReport !== undefined && task.hourReport > 0 && (
                               <span className="text-[10px] text-gray-500">
-                                ({task.hoursActual}h בפועל)
+                                ({task.hourReport}h בפועל)
                               </span>
                             )}
                           </div>
@@ -396,8 +525,10 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
         <TaskCard
           task={selectedTask}
           onClose={() => setSelectedTask(null)}
-          onUpdate={(updatedTask) => { onTaskUpdate(updatedTask); setSelectedTask(null); }}
+          onUpdate={(updatedTask) => { handleTaskUpdateFromCard(updatedTask); setSelectedTask(null); }}
           viewMode="myTasks"
+          statuses={statuses}
+          priorities={priorities}
         />
       )}
 
@@ -411,7 +542,14 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
       )}
 
       {/* Chat Modal */}
-      {showChatModal && chatTask && (
+         {showChatModal && chatTask && (
+        <ChatModal
+          task={chatTask}
+          setTask={setChatTask}
+          onClose={() =>{handleCloseChat();}}
+        />
+      )}
+      {/* {showChatModal && chatTask && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
             <div className="bg-gradient-to-r from-blue-500 to-purple-500 px-6 py-4 rounded-t-xl flex items-center justify-between">
@@ -435,9 +573,9 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
                 <div className="bg-white rounded-lg p-4 shadow-sm border border-gray-200">
                   <p className="text-sm text-gray-600 mb-2">💬 אזור הצ'אט של המשימה</p>
                   <div className="text-xs text-gray-500 bg-blue-50 p-3 rounded">
-                    <strong>פרויקט:</strong> {chatTask.project}
+                    <strong>פרויקט:</strong> {chatTask.projectName}
                     <br />
-                    <strong>סטטוס:</strong> {chatTask.status === 'done' ? 'הושלם' : chatTask.status === 'inProgress' ? 'בביצוע' : 'לביצוע'}
+                    <strong>סטטוס:</strong> {statusTextFromName(chatTask.statusName)}
                   </div>
                 </div>
                 {messages.map((msg) => (
@@ -502,7 +640,7 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
             </div>
           </div>
         </div>
-      )}
+      )} */}
     </>
   );
 }

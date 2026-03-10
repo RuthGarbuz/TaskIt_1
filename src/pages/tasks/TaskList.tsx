@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import type { Task, CurrentView } from '../../types/index';
-import { initialTasks } from '../../Data/tasksData';
+import type { CurrentView } from '../../types/index';
+import type { TaskReview } from '../../Data/projectsData';
 import AllTasks from './AllTasks';
 import MyTasks from './MyTasks';
 
@@ -9,13 +9,13 @@ interface TaskListProps {
 }
 
 export default function TaskList({ currentView }: TaskListProps) {
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
+  const [tasks, setTasks] = useState<TaskReview[]>([]);
 
-  const handleTaskUpdate = (updatedTask: Task) => {
+  const handleTaskUpdate = (updatedTask: TaskReview) => {
     setTasks(tasks.map(task => task.id === updatedTask.id ? updatedTask : task));
   };
 
-  const handleTasksUpdate = (updatedTasks: Task[]) => {
+  const handleTasksUpdate = (updatedTasks: TaskReview[]) => {
     setTasks(updatedTasks);
   };
 

@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import type { Task } from '../../types/index';
+import { useEffect, useState } from 'react';
+import type { EmployeeLink, SystemTable, TaskReview, TaskUpdatePatch } from '../../Data/projectsData';
 import { useTaskFilters } from '../../hooks/useTaskFilters';
 import { useTaskGrouping } from '../../hooks/useTaskGrouping';
 import TaskControls from './TaskControls';
@@ -8,11 +8,12 @@ import TaskCard from './TaskCard';
 import ViewModal from '../../components/ViewModal';        
 import FilterModal from '../../components/FilterModal';
 import GanttChart from './GanttChart';
+import { getTaskPriorities, getTaskStatuses, updateStatusAsync, updateUrgencyAsync, updateTaskAsync } from '../../services/taskService';
 
 interface AllTasksProps {
-  tasks: Task[];
-  onTaskUpdate: (updatedTask: Task) => void;
-  onTasksUpdate: (tasks: Task[]) => void;
+  tasks: TaskReview[];
+  onTaskUpdate: (updatedTask: TaskReview) => void;
+  onTasksUpdate: (tasks: TaskReview[]) => void;
 }
 
 export default function AllTasks({ tasks, onTaskUpdate, onTasksUpdate }: AllTasksProps) {
@@ -22,8 +23,11 @@ export default function AllTasks({ tasks, onTaskUpdate, onTasksUpdate }: AllTask
   const [showViewModal, setShowViewModal] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [activeView, setActiveView] = useState<'all' | 'status' | 'urgency' | 'project' | 'date'>('all');
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [selectedTask, setSelectedTask] = useState<TaskReview | null>(null);
   const [projectSearchQuery, setProjectSearchQuery] = useState('');
+const [statuses, setStatuses] = useState<SystemTable[]>([]);
+  const [priorities, setPriorities] = useState<SystemTable[]>([]);
+
 
   const {
     searchQuery,
@@ -39,42 +43,138 @@ export default function AllTasks({ tasks, onTaskUpdate, onTasksUpdate }: AllTask
 
   const groupedTasks = useTaskGrouping(filteredTasks, activeView);
   
-  const allEmployees = Array.from(new Set(tasks.flatMap(task => task.receivers))).sort();
+  const allEmployees = Array.from(new Set(tasks.flatMap(task => task.receivers ?? []))).sort();
+useEffect(() => {
+    let isMounted = true;
+
+    const loadStatuses = async () => {
+      try {
+        const data = await getTaskStatuses();
+        if (isMounted) {
+          setStatuses(data ?? []);
+        }
+      } catch (error) {
+        console.error('Error loading task statuses:', error);
+        if (isMounted) {
+          setStatuses([]);
+        }
+      }
+    };
+
+    const loadPriorities = async () => {
+      try {
+        const data = await getTaskPriorities();
+        if (isMounted) {
+          setPriorities(data ?? []);
+        }
+      } catch (error) {
+        console.error('Error loading task priorities:', error);
+        if (isMounted) {
+          setPriorities([]);
+        }
+      }
+    };
+
+    loadStatuses();
+    loadPriorities();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const handleTaskComplete = (taskId: number) => {
-    const updatedTasks = tasks.map(task => 
-      task.id === taskId 
-        ? { ...task, completed: !task.completed, status: !task.completed ? 'done' as const : 'todo' as const }
+    const updatedTasks = tasks.map(task =>
+      task.id === taskId
+        ? { ...task, isClosed: !task.isClosed, statusName: !task.isClosed ? 'הושלם' : task.statusName }
         : task
     );
     onTasksUpdate(updatedTasks);
   };
 
-  const handleTaskStatusChange = (taskId: number, newStatus: 'todo' | 'inProgress' | 'done') => {
-    const updatedTasks = tasks.map(task => 
-      task.id === taskId 
-        ? { ...task, status: newStatus, completed: newStatus === 'done' }
+  const handleTaskStatusChange = async (taskId: number, statusId: number, statusName: string) => {
+    const isTask = tasks.find((task) => task.id === taskId)?.isPlanningSte ?? false;
+    
+    await updateStatusAsync(taskId, statusId, !isTask,true);
+
+    const updatedTasks = tasks.map(task =>
+      task.id === taskId
+        ? { ...task, statuID: statusId, statusName, isClosed: statusName === 'הושלם' }
         : task
     );
     onTasksUpdate(updatedTasks);
   };
 
-  const handleTaskUrgencyChange = (taskId: number, newUrgency: 'low' | 'medium' | 'high') => {
-    const updatedTasks = tasks.map(task => 
-      task.id === taskId 
-        ? { ...task, urgency: newUrgency }
-        : task
-    );
-    onTasksUpdate(updatedTasks);
-  };
+ const handleTaskUrgencyChange = async (taskId: number, urgencyId: number, urgencyName: string) => {
+  const isTask = tasks.find((task) => task.id === taskId)?.isPlanningSte ?? false;
+
+  await updateUrgencyAsync(taskId, urgencyId, !isTask);
+
+  const updatedTasks = tasks.map(task =>
+    task.id === taskId
+      ? { ...task, urgencyID: urgencyId, urgencyName }
+      : task
+  );
+  onTasksUpdate(updatedTasks);
+};
 
   const handleTaskSubjectChange = (taskId: number, newSubject: string) => {
-    const updatedTasks = tasks.map(task => 
-      task.id === taskId 
+    const updatedTasks = tasks.map(task =>
+      task.id === taskId
         ? { ...task, subject: newSubject }
         : task
     );
     onTasksUpdate(updatedTasks);
+  };
+  const buildChanges = (editedTask: TaskReview): TaskUpdatePatch => {
+    const urgencyId = priorities.find(p => p.name === editedTask.urgencyName)?.id ?? editedTask.urgencyID;
+
+    return {
+      id: editedTask.id,
+      subject: editedTask.subject,
+      statuID: editedTask.statuID,
+      urgencyID: editedTask.urgencyID,
+      dependsOnStepID: editedTask.dependsOnStepID,
+      dependsOnTaskID: editedTask.dependsOnTaskID,
+
+      startDate: editedTask.startDate,
+      endDate: editedTask.endDate
+    };
+  };
+ // const sameArray = (a?: string[] | null, b?: string[] | null) =>
+    //JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+  // const buildChanges = (editedTask: TaskReview): TaskUpdatePatch => {
+  //   const changes: TaskUpdatePatch = { id: editedTask.id };
+  //   const task = tasks.find((task) => task.id === editedTask.id);
+
+  //   if (!task) return changes;
+
+
+  //     if (editedTask.subject !== task.subject) changes.subject = editedTask.subject;
+  //     if (editedTask.urgencyID !== task.urgencyID) {
+  //       const urgencyId = priorities.find(p => p.name === editedTask.urgencyName)?.id;
+  //       if (urgencyId != null) changes.urgencyID = urgencyId;
+  //     }
+  //     if (editedTask.dependsOnStepID !== task.dependsOnStepID) changes.dependsOnStepID = editedTask.dependsOnStepID;
+  //     if ((editedTask.startDate ?? '') !== (task.startDate ?? '')) changes.startDate = editedTask.startDate;
+  //     if ((editedTask.endDate ?? '') !== (task.endDate ?? '')) changes.endDate = editedTask.endDate;
+  //     //if (!sameArray(editedTask.receivers, task.receivers)) changes.receivers = editedTask.receivers ?? [];
+
+
+   
+  //     if (editedTask.statuID !== task.statuID) changes.statuID = editedTask.statuID;
+
+
+  //   return changes;
+  // };
+  const handleTaskUpdateFromCard = async (updatedTask: TaskReview, employeeLinks: EmployeeLink[]) => {
+    const changes = buildChanges(updatedTask);
+    const hasChanges = Object.keys(changes).length > 1; // id + something
+    if (!hasChanges && employeeLinks.every(l => !l.isModified && !l.isNew && !l.isDeleted)) return;
+
+    const isTask = updatedTask.isPlanningSte ?? false;
+    await updateTaskAsync(changes, employeeLinks, !isTask);
+
+    onTaskUpdate(updatedTask);
   };
 
   return (
@@ -139,24 +239,29 @@ export default function AllTasks({ tasks, onTaskUpdate, onTasksUpdate }: AllTask
                 onTaskStatusChange={handleTaskStatusChange}
                 onTaskUrgencyChange={handleTaskUrgencyChange}
                 onTaskSubjectChange={handleTaskSubjectChange}
-                onTaskClick={setSelectedTask}
+                onTaskClick={(task) => setSelectedTask(task)}
+                onTasksUpdate={onTasksUpdate}
+                statuses={statuses}
+                priorities={priorities}
               />
             </div>
           ))}
         </div>
       ) : (
-       <GanttChart tasks={filteredTasks} timeframe={ganttTimeframe} currentView="allTasks" />
+      <GanttChart tasks={filteredTasks} timeframe={ganttTimeframe} currentView="allTasks" />
       )}
 
       {selectedTask && (
         <TaskCard 
           task={selectedTask} 
           onClose={() => setSelectedTask(null)}
-          onUpdate={(updatedTask) => {
-            onTaskUpdate(updatedTask);
+          onUpdate={(updatedTask, employeeLinks) => {
+            handleTaskUpdateFromCard(updatedTask, employeeLinks);
             setSelectedTask(null);
           }}
           viewMode="allTasks"
+          statuses={statuses}
+          priorities={priorities}
         />
       )}
     </>

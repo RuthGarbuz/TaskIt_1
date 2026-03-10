@@ -189,6 +189,7 @@ export interface EmployeeLink {
   workHours: number;
   workDays: number;
   duration: number;
+  statusId?: number;
   isNew?: boolean;
   isModified?: boolean;
   isDeleted?: boolean;
@@ -199,6 +200,7 @@ export interface LinkEmployeesToStageModalProps {
   stageDuration: number;
   stageHours: number;
   hoursPerDay: number;
+  statusId?: number;
   itemType?: 'stage' | 'task';
   initialEmployees?: EmployeeLink[];
   onClose: () => void;

@@ -43,6 +43,7 @@ class AuthService {
         allowAddReport: data.allowAddReport,
         password: password,
         rememberMe: rememberMe,
+        permissionId: data.permissionId,
       };
 
       if (rememberMe) {

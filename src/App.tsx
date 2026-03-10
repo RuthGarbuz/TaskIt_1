@@ -14,6 +14,8 @@ import { initialTasks } from './Data/tasks';
 import type { ProjectBasic } from './Data/projectInfoData';
 import WorkloadView from './components/WorkLoadView';
 import HoursReportList from './pages/hoursReport/HoursReportList';
+import type { TaskReview } from './Data/projectsData';
+import { getMyTasks, getTasks } from './services/taskService';
 
 interface SelectedProject {
   id: number;
@@ -31,7 +33,7 @@ function App() {
   const [projects, setProjects] = useState<ProjectBasic[]>([]);
 
   // Tasks state
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
+  const [tasks, setTasks] = useState<TaskReview[]>();
 
   // Login handler
   const handleLogin = async (username: string) => {
@@ -79,19 +81,30 @@ function App() {
   };
 
   // View change handler
-  const handleViewChange = (view: CurrentView) => {
+  const handleViewChange = async(view: CurrentView) => {
     setCurrentView(view);
+   
+      if (view === 'myTasks') {
+        const data = await getMyTasks(null,null);
+        setTasks(data);
+
+      }
+      if (view ==='allTasks') {
+        const data = await getTasks(selectedProject?.id??0,null,null);
+        setTasks(data);
+      }
+  
     if (view !== 'projects') {
       setSelectedProject(null);
     }
   };
 
   // Task handlers
-  const handleTaskUpdate = (updatedTask: Task) => {
-    setTasks(tasks.map(task => task.id === updatedTask.id ? updatedTask : task));
+  const handleTaskUpdate = (updatedTask: TaskReview) => {
+    setTasks(tasks?.map(task => task.id === updatedTask.id ? updatedTask : task));
   };
 
-  const handleTasksUpdate = (updatedTasks: Task[]) => {
+  const handleTasksUpdate = (updatedTasks: TaskReview[]) => {
     setTasks(updatedTasks);
   };
 
@@ -120,7 +133,7 @@ function App() {
       {/* Sidebar - always visible */}
       <Sidebar 
         currentView={currentView} 
-        onViewChange={handleViewChange}
+        onViewChange={async (view) => await handleViewChange(view)}
         onProjectSelect={handleProjectSelect}
         onLogout={handleLogout}
         projects={projects}
@@ -142,14 +155,14 @@ function App() {
             <main className="flex-1 overflow-auto">
               {currentView === 'myTasks' && (
                 <MyTasks 
-                  tasks={tasks}
+                  tasks={tasks??[]}
                   onTaskUpdate={handleTaskUpdate}
                   onTasksUpdate={handleTasksUpdate}
                 />
               )}
               {currentView === 'allTasks' && (
                 <AllTasks 
-                  tasks={tasks}
+                  tasks={tasks??[]}
                   onTaskUpdate={handleTaskUpdate}
                   onTasksUpdate={handleTasksUpdate}
                 />

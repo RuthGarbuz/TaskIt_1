@@ -932,7 +932,7 @@ const [messageBox, setMessageBox] = useState<{
     if (!step) return null;
     if (type === 'step') return {
       itemType: 'stage' as const, stageName: step.name,
-      stageDuration: step.duration, stageHours: step.workHours,
+      stageDuration: step.duration, stageHours: step.workHours,statusId: step.statusId,
       initialEmployees: step.employees.filter(employee => !employee.isDeleted),
       onSave: (emps: EmployeeLink[]) => saveStepEmployees(subjectId, stepId, emps),
     };
@@ -940,7 +940,7 @@ const [messageBox, setMessageBox] = useState<{
     if (!task) return null;
     return {
       itemType: 'task' as const, stageName: task.name,
-      stageDuration: task.duration, stageHours: task.workHours,
+      stageDuration: task.duration, stageHours: task.workHours,statusId: task.statusId,
       initialEmployees: task.employees.filter(employee => !employee.isDeleted),
       onSave: (emps: EmployeeLink[]) => saveTaskEmployees(subjectId, stepId, taskId!, emps),
     };
@@ -1215,6 +1215,7 @@ setOpenImport(true);
         stageName={empModalProps.stageName}
         stageDuration={empModalProps.stageDuration}
         stageHours={empModalProps.stageHours}
+        statusId={empModalProps.statusId}
         hoursPerDay={WORK_HOURS_PER_DAY}
         initialEmployees={empModalProps.initialEmployees}
         onClose={() => setEmpModal(null)}

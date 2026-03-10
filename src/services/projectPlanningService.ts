@@ -8,6 +8,7 @@ interface SavePlanningEmployeeLinkRequest {
 	workHours: number;
 	workDays: number;
 	duration: number;
+	statusId?: number;
 }
 
 interface SavePlanningTaskRequest {
@@ -98,7 +99,8 @@ const buildEmployeeLinks = (employees: PlanningSubject["steps"][number]["employe
 			percentage: employee.percentage,
 			workHours: employee.workHours,
 			workDays: employee.workDays,
-			duration: employee.duration
+			duration: employee.duration,
+			statusId: employee.statusId
 		}));
 
 const buildSubjectRequest = (subject: PlanningSubject): SavePlanningSubjectRequest => {
@@ -269,7 +271,7 @@ export const savePlanningHierarchy = async (subjects: PlanningSubject[],projectI
 		const user = getAuthenticatedUser();
 		const requestBody = {
 			database: user.dataBase,
-			employeeID: user.employeeId,
+			employeeID: user.id,
 			projectId: projectId ?? 0,
 			PlanningSubject: subjects.map((subject) => buildSubjectRequest(subject))
 		};

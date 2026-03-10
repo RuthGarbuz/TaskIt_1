@@ -32,21 +32,21 @@ export const getStatusText = (status: string) => {
   }
 };
 
-export const getUrgencyColor = (urgency: string) => {
+export const getUrgencyColor = (urgency: number) => {
   switch (urgency) {
-    case 'high': return 'text-red-600';
-    case 'medium': return 'text-yellow-600';
+    case 1: return 'text-red-600';
+    case 2: return 'text-yellow-600';
     default: return 'text-green-600';
   }
 };
 
-export const getUrgencyText = (urgency: string) => {
-  switch (urgency) {
-    case 'high': return 'גבוהה';
-    case 'medium': return 'בינונית';
-    default: return 'נמוכה';
-  }
-};
+// export const getUrgencyText = (urgency: number) => {
+//   switch (urgency) {
+//     case 'high': return 'גבוהה';
+//     case 'medium': return 'בינונית';
+//     default: return 'נמוכה';
+//   }
+// };
 
 export const getInitials = (name: string) => name.split(' ').map(n => n[0]).join('').slice(0, 2);
 

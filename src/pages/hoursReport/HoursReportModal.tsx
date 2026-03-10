@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Clock, Calendar, X, CheckCircle, AlertCircle } from 'lucide-react';
 import type { Task } from '../../types';
+import type { TaskReview } from '../../Data/projectsData';
 
 interface HoursReportModalProps {
-  task: Task;
+  task: Task | TaskReview;
   onClose: () => void;
   onSave: (report: HoursReport) => void;
 }
@@ -110,11 +111,11 @@ export default function HoursReportModal({ task, onClose, onSave }: HoursReportM
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div>
               <span className="text-gray-500 text-xs block mb-0.5">פרויקט</span>
-              <span className="font-semibold text-gray-800">{task.project}</span>
+              <span className="font-semibold text-gray-800">{'project' in task ? task.project : task.projectName}</span>
             </div>
             <div>
               <span className="text-gray-500 text-xs block mb-0.5">שלב / משימה</span>
-              <span className="font-semibold text-gray-800 truncate block">{task.stage || task.subject}</span>
+              <span className="font-semibold text-gray-800 truncate block">{'stage' in task ? (task.stage || task.subject) : (task.name || task.subject)}</span>
             </div>
           </div>
         </div>

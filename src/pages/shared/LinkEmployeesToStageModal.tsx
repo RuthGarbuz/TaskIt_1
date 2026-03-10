@@ -11,6 +11,7 @@ export default function LinkEmployeesToStageModal({
   stageDuration,
   stageHours,
   hoursPerDay,
+  statusId,
   itemType = 'stage',
   initialEmployees = [],
   onClose,
@@ -110,6 +111,7 @@ export default function LinkEmployeesToStageModal({
       workHours: 0,
       workDays: 0,
       duration: Math.max(1, stageDuration),
+      statusId: statusId, // Assuming 0 is the default status for new links
       isNew: true
     };
 

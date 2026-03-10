@@ -35,6 +35,7 @@ export interface EmployeeLink {
   workHours: number;
   workDays: number;
   duration: number;
+  statusId?: number;
   isNew?: boolean;
   isModified?: boolean;
   isDeleted?: boolean;
@@ -106,6 +107,7 @@ export interface SystemTable {
   id: number;
   name: string;
   isDefault: boolean;
+  color?: string;
 }
 export interface SubContract {
   id: number;
@@ -128,13 +130,35 @@ export interface GetTasksRequest {
   projectId: number;
   employeeId: number;
   permissionType: number;
-  myTask: boolean;
+  fromDate: string | null;
+  toDate: string | null;
+}
+
+export interface GetMyTasksRequest {
+  database: string;
+  employeeId: number;
+  fromDate: string | null;
+  toDate: string | null;
+}
+
+export interface GetChatDataRequest {
+  database: string;
+  taskId: number;
+}
+
+export interface TaskChatMessage {
+  id: number;
+  senderName: string;
+  createDate: string;
+  message: string;
 }
 
 export interface TaskReview {
   id: number;
   planningStepID: number;
   name: string;
+  subject: string;
+  planningSubjectName: string;
   percentage: number;
   workHours: number;
   workDays: number;
@@ -145,6 +169,8 @@ export interface TaskReview {
   startDate: string;
   endDate: string;
   senderID: number;
+  receivers: string[] | null;
+  senderName: string;
   statuID: number;
   statusName: string;
   urgencyID: number;
@@ -156,8 +182,21 @@ export interface TaskReview {
   isClosed: boolean;
   orderNum: number;
   hourReport: number;
+  projectName: string;
+  utilizationPercentage: number;
+  hasChat: boolean;
+  isPlanningSte: boolean;
 }
-
+export interface TaskUpdatePatch {
+  id: number;
+  subject?: string;
+  statuID?: number;
+  urgencyID?: number;
+  dependsOnStepID?: boolean;
+  dependsOnTaskID?: boolean;
+  startDate?: string;
+  endDate?: string;
+}
 export interface PlanningHierarchyQuery {
   database: string;
   projectId: number;

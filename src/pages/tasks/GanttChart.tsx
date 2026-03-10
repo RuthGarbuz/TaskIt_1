@@ -1,12 +1,13 @@
 import { useState, useMemo } from 'react';
 import { ChevronLeft, ChevronRight, Calendar } from 'lucide-react';
 import type { Task } from '../../types';
+import type { TaskReview } from '../../Data/projectsData';
 
 interface GanttChartProps {
-  tasks: Task[];
+  tasks: Array<Task | TaskReview>;
   timeframe: 'weekly' | 'monthly';
   currentView?: 'allTasks' | 'myTasks';
-  onTaskClick?: (task: Task) => void;
+  onTaskClick?: (task: Task | TaskReview) => void;
 }
 
 const URGENCY_COLORS = {
@@ -45,9 +46,43 @@ export default function GanttChart({
   const [colorBy, setColorBy] = useState<'status' | 'urgency' | 'employee'>('urgency');
 
   // בנה מפת עובד → צבע
+  const getReceivers = (task: Task | TaskReview) =>
+    'receivers' in task ? (task.receivers ?? []) : ( []);
+
+  const getUrgencyKey = (task: Task | TaskReview) => {
+    if ('urgency' in task) return task.urgency;
+    const value = task.urgencyName?.toLowerCase() ?? '';
+    if (value.includes('high') || value.includes('גבוה')) return 'high';
+    if (value.includes('medium') || value.includes('בינונית')) return 'medium';
+    return 'low';
+  };
+
+  const getStatusKey = (task: Task | TaskReview) => {
+    if ('status' in task) return task.status;
+    const value = task.statusName?.toLowerCase() ?? '';
+    if (value.includes('done') || value.includes('הושלם') || value.includes('סגור')) return 'done';
+    if (value.includes('progress') || value.includes('בביצוע')) return 'inProgress';
+    return 'todo';
+  };
+
+  const getHoursEstimate = (task: Task | TaskReview) =>
+    'hoursEstimate' in task ? (task.hoursEstimate ?? 0) : ((task as TaskReview).workHours ?? 0);
+
+  const getHoursActual = (task: Task | TaskReview) =>
+    'hoursActual' in task ? (task.hoursActual ?? 0) : ((task as TaskReview).hourReport ?? 0);
+
+  const getProjectName = (task: Task | TaskReview) =>
+    'project' in task ? task.project : ((task as TaskReview).projectName ?? '');
+
+  const getStageName = (task: Task | TaskReview) =>
+    'stage' in task ? task.stage : ((task as TaskReview).name ?? '');
+
+  const getSubjectName = (task: Task | TaskReview) =>
+    'subject' in task ? task.subject : (((task as TaskReview).subject) || (task as TaskReview).name || '');
+
   const employeeColorMap = useMemo(() => {
     const allEmployees = Array.from(
-      new Set(tasks.flatMap(t => t.receivers ?? []))
+      new Set(tasks.flatMap(t => getReceivers(t)))
     ).sort();
     const map: Record<string, { bg: string; hex: string }> = {};
     allEmployees.forEach((emp, i) => {
@@ -114,9 +149,9 @@ export default function GanttChart({
     });
   }, [currentDate, timeframe]);
 
-  const getTaskStyle = (task: Task) => {
+  const getTaskStyle = (task: Task | TaskReview) => {
     const hoursInDay = 8;
-    const hours = task.hoursEstimate || 0;
+    const hours = getHoursEstimate(task);
     if (timeframe === 'weekly') {
       const w = (Math.ceil(hours / hoursInDay) / 5) * 100;
       return { width: `${Math.min(w, 100)}%`, left: '0%' };
@@ -125,18 +160,20 @@ export default function GanttChart({
     return { width: `${Math.min(w, 100)}%`, left: '0%' };
   };
 
-  const getTaskBarColor = (task: Task): string => {
+  const getTaskBarColor = (task: Task | TaskReview): string => {
     if (colorBy === 'employee') {
-      const firstReceiver = task.receivers?.[0];
+      const firstReceiver = getReceivers(task)[0];
       if (firstReceiver && employeeColorMap[firstReceiver]) {
         return employeeColorMap[firstReceiver].bg;
       }
       return 'bg-gray-400';
     }
     if (colorBy === 'urgency') {
-      return URGENCY_COLORS[task.urgency as keyof typeof URGENCY_COLORS]?.bg ?? URGENCY_COLORS.medium.bg;
+      const urgency = getUrgencyKey(task) as keyof typeof URGENCY_COLORS;
+      return URGENCY_COLORS[urgency]?.bg ?? URGENCY_COLORS.medium.bg;
     }
-    return STATUS_COLORS[task.status as keyof typeof STATUS_COLORS]?.bg ?? STATUS_COLORS.todo.bg;
+    const status = getStatusKey(task) as keyof typeof STATUS_COLORS;
+    return STATUS_COLORS[status]?.bg ?? STATUS_COLORS.todo.bg;
   };
 
   const getUtilizationColor = (pct: number) => {
@@ -146,7 +183,7 @@ export default function GanttChart({
   };
 
   const calculateSlotUtilization = () => {
-    const total = tasks.reduce((s, t) => s + (t.hoursEstimate || 0), 0);
+    const total = tasks.reduce((s, t) => s + getHoursEstimate(t), 0);
     const avg = total / timeSlots.length;
     return Math.min(Math.round((avg / 8) * 100), 100);
   };
@@ -209,10 +246,10 @@ export default function GanttChart({
                         <div
                           className={`absolute top-0 h-full ${getTaskBarColor(task)} rounded-full shadow-md flex items-center px-3 hover:shadow-lg transition-all`}
                           style={getTaskStyle(task)}
-                          title={`${task.project} - ${task.stage}\n${task.subject}\n${task.hoursEstimate}h`}
+                          title={`${getProjectName(task)} - ${getStageName(task)}\n${getSubjectName(task)}\n${getHoursEstimate(task)}h`}
                         >
                           <span className="text-white text-xs font-semibold truncate">
-                            {task.project} - {task.subject}
+                            {getProjectName(task)} - {getSubjectName(task)}
                           </span>
                         </div>
                       </div>
@@ -294,15 +331,15 @@ export default function GanttChart({
             <div className="text-xs text-gray-600">משימות</div>
           </div>
           <div className="text-center">
-            <div className="text-2xl font-bold text-emerald-600">{tasks.reduce((s, t) => s + (t.hoursEstimate || 0), 0)}</div>
+            <div className="text-2xl font-bold text-emerald-600">{tasks.reduce((s, t) => s + getHoursEstimate(t), 0)}</div>
             <div className="text-xs text-gray-600">שעות מתוכננות</div>
           </div>
           <div className="text-center">
-            <div className="text-2xl font-bold text-purple-600">{tasks.reduce((s, t) => s + (t.hoursActual || 0), 0)}</div>
+            <div className="text-2xl font-bold text-purple-600">{tasks.reduce((s, t) => s + getHoursActual(t), 0)}</div>
             <div className="text-xs text-gray-600">שעות בפועל</div>
           </div>
           <div className="text-center">
-            <div className="text-2xl font-bold text-yellow-600">{tasks.filter(t => t.status === 'done').length}</div>
+            <div className="text-2xl font-bold text-yellow-600">{tasks.filter(t => getStatusKey(t) === 'done').length}</div>
             <div className="text-xs text-gray-600">הושלמו</div>
           </div>
         </div>

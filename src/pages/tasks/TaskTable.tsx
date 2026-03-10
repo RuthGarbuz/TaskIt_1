@@ -1,22 +1,26 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Clock, AlertCircle, Eye, MessageSquare, Send } from 'lucide-react';
-import type { Task, CurrentView } from '../../types/index';
-import { 
-  getStatusColor, 
-  getUrgencyColor, 
-  getUrgencyText, 
-  getInitials, 
-  getAvatarColor 
+import type { CurrentView } from '../../types/index';
+import {
+  getStatusColor,
+  getInitials,
+  getAvatarColor
 } from '../../Data/tasksData';
+import type { SystemTable, TaskReview } from '../../Data/projectsData';
+import { getTaskPriorities, getTaskStatuses } from '../../services/taskService';
+import ChatModal from './ChatModal';
 
 interface TaskTableProps {
-  tasks: Task[];
+  tasks: TaskReview[];
   currentView: CurrentView;
   onTaskComplete: (taskId: number) => void;
-  onTaskStatusChange: (taskId: number, status: 'todo' | 'inProgress' | 'done') => void;
-  onTaskUrgencyChange: (taskId: number, urgency: 'low' | 'medium' | 'high') => void;
+  onTaskStatusChange: (taskId: number, statusId: number, statusName: string) => void;
+  onTaskUrgencyChange: (taskId: number, urgencyId: number, urgencyName: string) => void;
   onTaskSubjectChange: (taskId: number, subject: string) => void;
-  onTaskClick: (task: Task) => void;
+  onTaskClick: (task: TaskReview) => void;
+  onTasksUpdate: (updatedTasks: TaskReview[]) => void;
+  statuses: SystemTable[];
+  priorities: SystemTable[];
 }
 
 export default function TaskTable({
@@ -27,14 +31,53 @@ export default function TaskTable({
   onTaskUrgencyChange,
   onTaskSubjectChange,
   onTaskClick,
+  onTasksUpdate,
+  statuses,
+  priorities
 }: TaskTableProps) {
   const [hoveredTaskId, setHoveredTaskId] = useState<number | null>(null);
   const [editingTaskId, setEditingTaskId] = useState<number | null>(null);
   const [editingSubject, setEditingSubject] = useState('');
   const [showChatModal, setShowChatModal] = useState(false);
-  const [chatTask, setChatTask] = useState<Task | null>(null);
+  const [chatTask, setChatTask] = useState<TaskReview | null>(null);
+  
+  const statusKeyFromName = (statusName: string) => {
+    const value = statusName.toLowerCase();
+    if (value.includes('done') || value.includes('הושלם') || value.includes('סגור')) return 'done' as const;
+    if (value.includes('progress') || value.includes('בביצוע')) return 'inProgress' as const;
+    return 'todo' as const;
+  };
+ const getUrgencyColorByKey = (urgencyId: number) => {
+    const priority = priorities.find(p => p.id === urgencyId);
+    const color = priority?.color ?? '';
+    return color
+      ? { color, stroke: color } as React.CSSProperties
+      : undefined;
+  };
+  const getStatusColorByKey = (statusId: number) => {
+    const status = statuses.find(s => s.id === statusId);
+    const color = status?.color ?? '';
+   return color
+      ? ({ color, stroke: color } as React.CSSProperties)
+      : undefined;
+  };
+  // const getUrgencyColorByKey = (urgencyId:number) => {
+  //    const priority = priorities.find(p => p.id === urgencyId);
+  //   const color = priority?.color ?? '';
 
-  const startEditingSubject = (task: Task) => {
+  //   if (color.startsWith('text-')) {
+  //     return { className: color, style: undefined as React.CSSProperties | undefined };
+  //   }
+
+  //   if (color.startsWith('#')) {
+  //     return { className: '', style: { color } as React.CSSProperties };
+  //   }
+
+  //   return { className: '', style: undefined as React.CSSProperties | undefined };
+  // };
+
+  
+  const startEditingSubject = (task: TaskReview) => {
     setEditingTaskId(task.id);
     setEditingSubject(task.subject);
   };
@@ -52,17 +95,26 @@ export default function TaskTable({
     setEditingSubject('');
   };
 
-  const handleOpenChat = (task: Task, e: React.MouseEvent) => {
+  const handleOpenChat = (task: TaskReview, e: React.MouseEvent) => {
     e.stopPropagation();
     setChatTask(task);
     setShowChatModal(true);
   };
 
-  const handleSendInvoiceRequest = (task: Task, e: React.MouseEvent) => {
+  const handleSendInvoiceRequest = (task: TaskReview, e: React.MouseEvent) => {
     e.stopPropagation();
     alert(`שליחת בקשה להגשת חשבון עבור: ${task.subject}`);
   };
-
+ const handleCloseChat = () => {
+    if (chatTask?.hasChat) {
+      const updatedTasks = tasks.map(t =>
+        t.id === chatTask.id ? { ...t, hasChat: true } : t
+      );
+      onTasksUpdate(updatedTasks);
+    }
+    setShowChatModal(false);
+  };
+ 
   return (
     <>
       <div className="overflow-x-auto">
@@ -103,7 +155,7 @@ export default function TaskTable({
                 <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                   <input 
                     type="checkbox" 
-                    checked={task.completed || false}
+                    checked={task.isClosed || false}
                     onChange={() => onTaskComplete(task.id)}
                     className="w-4 h-4 rounded border-gray-300 text-emerald-500 cursor-pointer focus:ring-emerald-500" 
                   />
@@ -140,7 +192,7 @@ export default function TaskTable({
                   ) : (
                     <span 
                       onClick={currentView === 'allTasks' ? () => startEditingSubject(task) : undefined}
-                      className={`text-xs font-medium ${task.completed ? 'line-through text-gray-400' : 'text-gray-900'} ${currentView === 'allTasks' ? 'cursor-text hover:bg-gray-100' : ''} px-1 rounded`}
+                      className={`text-xs font-medium ${task.isClosed ? 'line-through text-gray-400' : 'text-gray-900'} ${currentView === 'allTasks' ? 'cursor-text hover:bg-gray-100' : ''} px-1 rounded`}
                     >
                       {task.subject}
                     </span>
@@ -155,7 +207,7 @@ export default function TaskTable({
                     title="פתח צ'אט"
                   >
                     <MessageSquare size={14} />
-                    {task.hasUnreadMessages && (
+                    {task.hasChat && (
                       <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-white" />
                     )}
                   </button>
@@ -163,29 +215,39 @@ export default function TaskTable({
 
                 {/* שלב */}
                 <td className="px-3 py-2">
-                  <span className="inline-flex px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">{task.stage}</span>
+                  <span className="inline-flex px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">{task.name}</span>
                 </td>
 
                 {/* נושא תכנון */}
                 <td className="px-3 py-2">
-                  <span className="text-xs text-gray-600">{task.planning}</span>
+                  <span className="text-xs text-gray-600">{task.planningSubjectName}</span>
                 </td>
 
                 {/* פרויקט */}
                 <td className="px-3 py-2">
-                  <span className="text-xs text-gray-600">{task.project}</span>
+                  <span className="text-xs text-gray-600">{task.projectName}</span>
                 </td>
 
                 {/* סטטוס */}
                 <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                   <select
-                    value={task.status}
-                    onChange={(e) => onTaskStatusChange(task.id, e.target.value as any)}
-                    className={`text-xs font-medium px-2 py-1 rounded-full border cursor-pointer focus:ring-2 focus:ring-emerald-500 ${getStatusColor(task.status)}`}
+                    value={String(statuses.find((status) => status.name === task.statusName)?.id ?? task.statuID ?? 0)}
+                    onChange={(e) => {
+                      const statusId = Number(e.target.value);
+                      const statusName = statuses.find((status) => status.id === statusId)?.name ?? task.statusName;
+                      onTaskStatusChange(task.id, statusId, statusName);
+                    }}
+                    className="text-xs font-medium px-2 py-1 rounded-full border cursor-pointer focus:ring-2 focus:ring-emerald-500"
+                    style={getStatusColorByKey(task.statuID ?? 0)}
                   >
-                    <option value="todo">לביצוע</option>
-                    <option value="inProgress">בביצוע</option>
-                    <option value="done">הושלם</option>
+                    {task.statuID === 0 && !statuses.some((status) => status.name === task.statusName) && (
+                      <option value="0">{task.statusName}</option>
+                    )}
+                    {statuses.map((status) => (
+                      <option key={status.id} value={String(status.id)}>
+                        {status.name}
+                      </option>
+                    ))}
                   </select>
                 </td>
 
@@ -193,39 +255,51 @@ export default function TaskTable({
                 <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                   {currentView === 'allTasks' ? (
                     <select
-                      value={task.urgency}
-                      onChange={(e) => onTaskUrgencyChange(task.id, e.target.value as any)}
-                      className={`text-xs font-medium px-2 py-1 rounded-full border cursor-pointer focus:ring-2 focus:ring-emerald-500 ${getUrgencyColor(task.urgency)}`}
+                      value={String(priorities.find((priority) => priority.name === task.urgencyName)?.id ?? task.urgencyID ?? 0)}
+                      onChange={(e) => {
+                        const urgencyId = Number(e.target.value);
+                        const urgencyName = priorities.find((priority) => priority.id === urgencyId)?.name ?? task.urgencyName;
+                        onTaskUrgencyChange(task.id, urgencyId, urgencyName);
+                      }}
+                      className="text-xs font-medium px-2 py-1 rounded-full border cursor-pointer focus:ring-2 focus:ring-emerald-500"
+                      style={getUrgencyColorByKey(task.urgencyID)}
                     >
-                      <option value="high">גבוהה</option>
-                      <option value="medium">בינונית</option>
-                      <option value="low">נמוכה</option>
+                      {task.urgencyID === 0 && !priorities.some((priority) => priority.name === task.urgencyName) && (
+                        <option value="0">{task.urgencyName}</option>
+                      )}
+                      {priorities.map((priority) => (
+                        <option key={priority.id} value={String(priority.id)}>
+                          {priority.name}
+                        </option>
+                      ))}
                     </select>
                   ) : (
                     <div className="flex items-center gap-1">
-                      <AlertCircle size={12} className={getUrgencyColor(task.urgency)} />
-                      <span className={`text-xs font-medium ${getUrgencyColor(task.urgency)}`}>{getUrgencyText(task.urgency)}</span>
+                     <AlertCircle size={12} style={getUrgencyColorByKey(task.urgencyID)} />
+                      <span className="text-xs font-medium" style={getUrgencyColorByKey(task.urgencyID)}>
+                        {task.urgencyName}
+                      </span>
                     </div>
                   )}
                 </td>
 
                 {/* שולח */}
                 <td className="px-3 py-2">
-                  <span className="text-xs text-gray-600">{task.sender}</span>
+                  <span className="text-xs text-gray-600">{task.senderName}</span>
                 </td>
 
                 {/* מקבל */}
                 {currentView === 'allTasks' && (
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-0.5">
-                      {task.receivers.slice(0, 2).map((receiver, idx) => (
+                      {(task.receivers ?? []).slice(0, 2).map((receiver, idx) => (
                         <div key={idx} className={`w-5 h-5 rounded-full ${getAvatarColor(receiver)} flex items-center justify-center text-white text-[10px] font-bold ${idx > 0 ? '-mr-1' : ''} border-2 border-white`}>
                           {getInitials(receiver)}
                         </div>
                       ))}
-                      {task.receivers.length > 2 && (
+                      {(task.receivers ?? []).length > 2 && (
                         <div className="w-5 h-5 rounded-full bg-gray-300 flex items-center justify-center text-gray-700 text-[10px] font-bold -mr-1 border-2 border-white">
-                          +{task.receivers.length - 2}
+                          +{(task.receivers ?? []).length - 2}
                         </div>
                       )}
                     </div>
@@ -236,7 +310,9 @@ export default function TaskTable({
                 <td className="px-3 py-2">
                   <div className="flex items-center gap-1">
                     <Clock size={12} className="text-gray-400" />
-                    <span className="text-xs text-gray-600">{task.startDate || task.date || '-'}</span>
+                    <span className="text-xs text-gray-600">
+                       {task.startDate || task.creatDate? new Date(task.startDate || task.creatDate).toLocaleDateString('en-GB') : '-'}
+                      </span>
                   </div>
                 </td>
 
@@ -244,7 +320,9 @@ export default function TaskTable({
                 <td className="px-3 py-2">
                   <div className="flex items-center gap-1">
                     <Clock size={12} className="text-gray-400" />
-                    <span className="text-xs text-gray-600">{task.endDate || '-'}</span>
+                    <span className="text-xs text-gray-600">
+                       {task.endDate ? new Date(task.endDate).toLocaleDateString('en-GB') : '-'}
+                      </span>
                   </div>
                 </td>
 
@@ -252,7 +330,7 @@ export default function TaskTable({
                 <td className="px-3 py-2 text-center">
                   <input
                     type="checkbox"
-                    checked={task.dependsOnStage || false}
+                    checked={task.dependsOnStepID || false}
                     disabled
                     className="w-4 h-4 text-emerald-600 rounded cursor-not-allowed opacity-60"
                   />
@@ -262,11 +340,11 @@ export default function TaskTable({
                 <td className="px-3 py-2">
                   <div className="flex flex-col items-start gap-0.5">
                     <span className="inline-flex items-center gap-0.5 px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-xs font-medium">
-                      {task.hoursEstimate || 0}h
+                      {task.workHours || 0}h
                     </span>
-                    {task.hoursActual !== undefined && task.hoursActual > 0 && (
+                    {task.hourReport !== undefined && task.hourReport > 0 && (
                       <span className="text-[10px] text-gray-500">
-                        ({task.hoursActual}h בפועל)
+                        ({task.hourReport}h בפועל)
                       </span>
                     )}
                   </div>
@@ -321,56 +399,13 @@ export default function TaskTable({
         </table>
       </div>
 
-      {/* Chat Modal */}
       {showChatModal && chatTask && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
-            <div className="bg-gradient-to-r from-blue-500 to-purple-500 px-6 py-4 rounded-t-xl flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <MessageSquare size={26} className="text-white" />
-                <div>
-                  <h3 className="text-xl font-bold text-white">צ'אט משימה</h3>
-                  <p className="text-sm text-blue-100">{chatTask.subject}</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowChatModal(false)}
-                className="text-white hover:bg-white hover:bg-opacity-20 rounded-full p-2 w-9 h-9 flex items-center justify-center font-bold text-xl transition-all"
-              >
-                ✕
-              </button>
-            </div>
-            
-            <div className="flex-1 p-6 overflow-y-auto bg-gray-50">
-              <div className="space-y-4">
-                <div className="bg-white rounded-lg p-4 shadow-sm border border-gray-200">
-                  <p className="text-sm text-gray-600 mb-2">💬 אזור הצ'אט של המשימה</p>
-                  <div className="text-xs text-gray-500 bg-blue-50 p-3 rounded">
-                    <strong>פרויקט:</strong> {chatTask.project}
-                    <br />
-                    <strong>סטטוס:</strong> {chatTask.status === 'done' ? 'הושלם' : chatTask.status === 'inProgress' ? 'בביצוע' : 'לביצוע'}
-                  </div>
-                </div>
-                <div className="text-center text-gray-400 text-sm py-8">
-                  ההודעות יופיעו כאן
-                </div>
-              </div>
-            </div>
+        <ChatModal
+        task={chatTask} 
+        setTask={setChatTask}
+        onClose={() =>{handleCloseChat();}}
 
-            <div className="border-t border-gray-200 p-4 bg-white rounded-b-xl">
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="כתוב הודעה..."
-                  className="flex-1 px-4 py-2.5 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                />
-                <button className="px-6 py-2.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 font-bold transition-all shadow-sm">
-                  שלח
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        />
       )}
     </>
   );

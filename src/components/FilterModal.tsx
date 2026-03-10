@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { X, Calendar } from 'lucide-react';
 import type { Task } from '../types/index';
-import { getStatusText, getUrgencyText } from '../Data/tasksData';
+import type { TaskReview } from '../Data/projectsData';
+import { getStatusText } from '../Data/tasksData';
 
 interface Filters {
   status: string[];
@@ -20,7 +21,7 @@ interface FilterModalProps {
   onFiltersChange: (filters: Filters) => void;
   onClearFilters: () => void;
   onClose: () => void;
-  baseTasks: Task[];
+  baseTasks: Array<Task | TaskReview>;
   projectSearchQuery: string;
   setProjectSearchQuery: (query: string) => void;
 }
@@ -35,12 +36,19 @@ export default function FilterModal({
   projectSearchQuery,
   setProjectSearchQuery,
 }: FilterModalProps) {
-  const allSenders = [...new Set(baseTasks.map(t => t.sender).filter(Boolean))].sort() as string[];
+  const getSender = (task: Task | TaskReview) =>
+    'sender' in task ? (task.sender ?? '') : (task.senderName ?? '');
+  const getProject = (task: Task | TaskReview) =>
+    'project' in task ? task.project : (task.projectName ?? '');
+  const getCompleted = (task: Task | TaskReview) =>
+    'completed' in task ? task.completed : task.isClosed;
+
+  const allSenders = [...new Set(baseTasks.map(getSender).filter(Boolean))].sort() as string[];
   const [senderSearchQuery, setSenderSearchQuery] = useState('');
   const filteredSenders = allSenders.filter(s =>
     s.toLowerCase().includes(senderSearchQuery.toLowerCase())
   );
-  const allProjects = [...new Set(baseTasks.map(t => t.project))];
+  const allProjects = [...new Set(baseTasks.map(getProject))];
 
   // projectActive filter — since Task has no projectActive field,
   // we treat a project as "active" if it has at least one non-completed task
@@ -48,7 +56,7 @@ export default function FilterModal({
     const matchesSearch = project.toLowerCase().includes(projectSearchQuery.toLowerCase());
     if (!matchesSearch) return false;
     if (filters.projectActive === 'all') return true;
-    const hasActiveTasks = baseTasks.some(t => t.project === project && !t.completed);
+    const hasActiveTasks = baseTasks.some(t => getProject(t) === project && !getCompleted(t));
     return filters.projectActive === 'active' ? hasActiveTasks : !hasActiveTasks;
   });
 
@@ -96,7 +104,7 @@ export default function FilterModal({
                       onChange={() => onFilterToggle('urgency', urgency)}
                       className="w-4 h-4 rounded text-emerald-500 focus:ring-emerald-500"
                     />
-                    <span className="text-sm">{getUrgencyText(urgency)}</span>
+                    <span className="text-sm">{urgency}</span>
                   </label>
                 ))}
               </div>
