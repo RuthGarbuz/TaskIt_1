@@ -33,6 +33,7 @@ export interface EmployeeLink {
   employeeName: string;
   percentage: number;
   workHours: number;
+  hoursActual?: number;
   workDays: number;
   duration: number;
   statusId?: number;
@@ -108,6 +109,7 @@ export interface SystemTable {
   name: string;
   isDefault: boolean;
   color?: string;
+  progressPercentage?:number
 }
 export interface SubContract {
   id: number;
@@ -132,6 +134,11 @@ export interface GetTasksRequest {
   permissionType: number;
   fromDate: string | null;
   toDate: string | null;
+  closedTasks?: boolean;
+  projectIds?: number[];
+  employeeIds?: number[];
+  statusIds?: number[];
+  priorityIds?: number[];
 }
 
 export interface GetMyTasksRequest {
@@ -139,6 +146,11 @@ export interface GetMyTasksRequest {
   employeeId: number;
   fromDate: string | null;
   toDate: string | null;
+  projectIds?: number[];
+  employeeIds?: number[];
+  statusIds?: number[];
+  priorityIds?: number[];
+  closedTasks?: boolean;
 }
 
 export interface GetChatDataRequest {
@@ -148,6 +160,7 @@ export interface GetChatDataRequest {
 
 export interface TaskChatMessage {
   id: number;
+  senderID: number; 
   senderName: string;
   createDate: string;
   message: string;
@@ -164,8 +177,8 @@ export interface TaskReview {
   workDays: number;
   duration: number;
   isActive: boolean;
-  dependsOnStepID: boolean ;
-  dependsOnTaskID: boolean ;
+  dependsOnStepID: boolean;
+  dependsOnTaskID: boolean;
   startDate: string;
   endDate: string;
   senderID: number;
@@ -179,13 +192,23 @@ export interface TaskReview {
   creatDate: string;
   lastUpdate: string;
   updateBy: number;
+  updateByName?: string;
   isClosed: boolean;
   orderNum: number;
   hourReport: number;
   projectName: string;
+  projectId: number;
   utilizationPercentage: number;
   hasChat: boolean;
   isPlanningSte: boolean;
+  projectType:string
+  studioDepartment: string
+}
+export interface SubContractData {
+	stepName: string;
+	subContractName: string;
+	contractName: string;
+	feeSum: number;
 }
 export interface TaskUpdatePatch {
   id: number;
@@ -196,7 +219,60 @@ export interface TaskUpdatePatch {
   dependsOnTaskID?: boolean;
   startDate?: string;
   endDate?: string;
+  workHours?: number;
+  workDays?: number;
+  /** אחוז משבצת התכנון (משימות) */
+  percentage?: number;
+  /** משך (ימים) – אם השרת דורש */
+  duration?: number;
 }
+
+export type TaskCardCascadeStage = { id: number; startDate: string; endDate: string };
+
+export type TaskStepHoursCascade = {
+  stepId: number;
+  newStepWorkHours: number;
+  duration?: number;
+  workDays?: number;
+  taskUpdates: { id: number; workHours: number; workDays: number; percentage: number }[];
+};
+
+/** עדכון תאריכי שלב-ההורה; otherTaskDateUpdates = משימות שתלויות במשימה הנערכת */
+export type TaskParentDateCascade = {
+  stepId: number;
+  startDate: string;
+  endDate: string;
+  duration?: number;
+  workHours?: number;
+  workDays?: number;
+  otherTaskDateUpdates?: { id: number; startDate: string; endDate: string; duration: number }[];
+};
+
+export type TaskCardSaveOptions = {
+  cascadeStage?: TaskCardCascadeStage;
+  taskStepHoursCascade?: TaskStepHoursCascade;
+  taskParentDateCascade?: TaskParentDateCascade;
+};
+
+export interface DependsOnStepData {
+  id: number;
+  isDependentOnPrevious: boolean;
+  dependsOnID: number | null;
+  dependsOn_StartDate: string | null;
+  dependsOn_EndDate: string | null;
+  isDependedOnByNext: boolean;
+  dependedByID: number | null;
+  dependedBy_StartDate: string | null;
+  dependedBy_EndDate: string | null;
+}
+
+export interface DependsOnTaskData extends DependsOnStepData {
+  parentStepID: number;
+  parentStep_StartDate: string;
+  parentStep_EndDate: string;
+  parentStep_WorkHours: number;
+}
+
 export interface PlanningHierarchyQuery {
   database: string;
   projectId: number;
@@ -274,6 +350,9 @@ export interface TemplateTask {
   workHours: number;
   workDays: number;
   duration: number;
+  taskPercentage: number;
+  /** From template/API — only rows with true become planning dependsOnTaskId (first task is always false). */
+  dependsOnTaskId?: boolean | null;
 }
 
 export interface TemplateStep {
@@ -283,6 +362,9 @@ export interface TemplateStep {
   workHours: number;
   workDays: number;
   duration: number;
+  /** From template/API — only rows with true become planning dependsOnStepId (first step is always false). */
+  dependsOnStepId?: boolean | null;
+  stepPercentage: number;
   tasks: TemplateTask[];
 }
 
@@ -295,4 +377,17 @@ export interface SubjectTemplate {
   stepsCount: number;
   tasksCount: number;
   steps: TemplateStep[];
+}
+export interface EmployeeNotification {
+  id: number;
+  isTask: boolean;
+  taskId: number;
+  taskChatId: number;
+  senderName: string;
+  message: string;
+  createDate: string;
+  isRead: boolean;
+  projectName: string;
+  planningSubjectName: string;
+  name: string;
 }

@@ -26,3 +26,9 @@
 .sidebar-scroll::-webkit-scrollbar-thumb:hover {
 	background: #6b7280;
 }
+.sticky-scroll-wrapper {
+  position: sticky;
+  bottom: 0;
+  overflow-x: auto;
+  overflow-y: visible;
+}

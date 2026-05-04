@@ -2,14 +2,18 @@ import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { Plus, Trash2, GripVertical, ChevronDown, ChevronRight, Users, Copy } from 'lucide-react';
 import LinkEmployeesToStageModal from '../../shared/LinkEmployeesToStageModal';
 import type { EmployeeLink, PlanningStepEmployeeLinkTemplate, PlanningStepTemplate, PlanningSubjectTemplate, PlanningTaskEmployeeLinkTemplate, PlanningTaskTemplate } from '../../../Data/PlanningTemplates';
-import { getPlanningTemplates, PlanningTemplates } from '../../../services/templatesSettingServices';
+import { deletePlanningSubjectTemplate, getPlanningTemplates, PlanningTemplates } from '../../../services/templatesSettingServices';
+import { getNumberOfHours } from '../../../services/settingService';
 import MessageBox from '../../shared/MessageBox';
 
+const DEFAULT_WORK_HOURS_PER_DAY = 8.00;
 
-const WORK_HOURS_PER_DAY = 8.00;
-
-// ─── EmployeeLink shape expected by the modal ────────────────────────────────
-
+const byOrderNum = <T extends { orderNum?: number; id?: number }>(a: T, b: T): number => {
+  const ao = a.orderNum ?? Number.MAX_SAFE_INTEGER;
+  const bo = b.orderNum ?? Number.MAX_SAFE_INTEGER;
+  if (ao !== bo) return ao - bo;
+  return (a.id ?? 0) - (b.id ?? 0);
+};
 
 export interface PlanningTopicsRef {
   save: () => Promise<void>;
@@ -19,6 +23,16 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
   // ─── State ─────────────────────────────────────────────────────────────────
   const [subjects, setSubjects] = useState<PlanningSubjectTemplate[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [WORK_HOURS_PER_DAY, setWORK_HOURS_PER_DAY] = useState<number>(DEFAULT_WORK_HOURS_PER_DAY);
+  const [draggingTask, setDraggingTask] = useState<{
+    subjectId: number;
+    stageId: number;
+    taskId: number;
+  } | null>(null);
+  const [draggingStage, setDraggingStage] = useState<{
+    subjectId: number;
+    stageId: number;
+  } | null>(null);
   const [messageBox, setMessageBox] = useState<{
     isOpen: boolean;
     title: string;
@@ -51,14 +65,8 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
         showCancel: true,
         confirmText: 'אישור',
         cancelText: 'ביטול',
-        onConfirm: () => {
-          resolve(true);
-          closeMessageBox();
-        },
-        onCancel: () => {
-          resolve(false);
-          closeMessageBox();
-        }
+        onConfirm: () => { resolve(true); closeMessageBox(); },
+        onCancel:  () => { resolve(false); closeMessageBox(); }
       });
     });
 
@@ -75,25 +83,42 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
     try {
       setIsLoading(true);
       const data = await getPlanningTemplates();
-      setSubjects(data);
+      setSubjects(
+        data.map((subject: PlanningSubjectTemplate) => ({
+          ...subject,
+          stages: [...subject.stages]
+            .sort(byOrderNum)
+            .map((stage: PlanningStepTemplate) => ({
+              ...stage,
+              tasks: [...stage.tasks].sort(byOrderNum),
+            })),
+        }))
+      );
     } catch (error) {
       console.error('Failed to load planning templates:', error);
-      setMessageBox({
-        isOpen: true,
-        title: 'שגיאה',
-        message: 'שגיאה בטעינת תבניות תכנון',
-        type: 'error'
-      });
+      setMessageBox({ isOpen: true, title: 'שגיאה', message: 'שגיאה בטעינת תבניות תכנון', type: 'error' });
     } finally {
       setIsLoading(false);
     }
   };
 
+  useEffect(() => { loadPlanningTemplates(); }, []);
+
   useEffect(() => {
-    loadPlanningTemplates();
+    const loadHours = async () => {
+      try {
+        const n = await getNumberOfHours();
+        if (n != null && Number.isFinite(n) && n > 0) {
+          setWORK_HOURS_PER_DAY(n);
+        }
+      } catch {
+        // Keep default on failure.
+      }
+    };
+    void loadHours();
   }, []);
 
-  // ─── Save Function ──────────────────────────────────────────────────────────
+  // ─── Save Function ─────────────────────────────────────────────────────────
   useImperativeHandle(ref, () => ({
     save: async () => {
       try {
@@ -113,20 +138,12 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
   const getTask = (subjectId: number, stageId: number, taskId: number) =>
     getStage(subjectId, stageId)?.tasks.find((t: PlanningTaskTemplate) => t.id === taskId);
 
-  // Stages that come BEFORE currentStageId (for dependency dropdown)
-  const getPriorStages = (subjectId: number, currentStageId: number): PlanningStepTemplate[] => {
-    const subject = subjects.find((s: PlanningSubjectTemplate) => s.id === subjectId);
-    if (!subject) return [];
-    const idx = subject.stages.findIndex((s: PlanningStepTemplate) => s.id === currentStageId);
-    return idx <= 0 ? [] : subject.stages.slice(0, idx);
-  };
-
-  // Tasks that come BEFORE currentTaskId (for dependency dropdown)
-  const getPriorTasks = (subjectId: number, stageId: number, currentTaskId: number): PlanningTaskTemplate[] => {
-    const stage = getStage(subjectId, stageId);
-    if (!stage) return [];
-    const idx = stage.tasks.findIndex((t: PlanningTaskTemplate) => t.id === currentTaskId);
-    return idx <= 0 ? [] : stage.tasks.slice(0, idx);
+  const employeeCountForStage = (stage: PlanningStepTemplate): number => {
+    const stageEmployeeIds = new Set(stage.employees.filter(e => !e.isDeleted).map(e => e.employeeId));
+    const taskEmployeeIds = new Set(
+      stage.tasks.flatMap(t => t.employees.filter(e => !e.isDeleted).map(e => e.employeeId))
+    );
+    return new Set([...stageEmployeeIds, ...taskEmployeeIds]).size;
   };
 
   // ─── Subject actions ───────────────────────────────────────────────────────
@@ -184,8 +201,17 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
   const deleteSubject = async (id: number) => {
     const confirmed = await openConfirm('האם אתה בטוח שברצונך למחוק נושא תכנון זה?');
     if (!confirmed) return;
-
-    setSubjects(prev => prev.map(s => 
+    const subject = subjects.find(s => s.id === id);
+    if (subject && !subject.isNew && subject.id > 0) {
+      try {
+        await deletePlanningSubjectTemplate(subject.id);
+        setSubjects(prev => prev.filter(s => s.id !== id));
+      } catch {
+        setMessageBox({ isOpen: true, title: 'שגיאה', message: 'שגיאה במחיקת נושא התכנון מהשרת', type: 'error' });
+      }
+      return;
+    }
+    setSubjects(prev => prev.map(s =>
       s.id === id ? (s.isNew ? s : { ...s, isDeleted: true }) : s
     ).filter(s => !(s.isNew && s.isDeleted)));
   };
@@ -201,21 +227,10 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
       }
     ));
 
-
-  const addStage = async(subjectId: number) =>{
-    // try {
-    //   // Ensure subject is saved if it's new
-    //  const newID  = await ensureSubjectSaved(subjectId);
-    //   if(newID)
-    //  subjectId = newID;
-    // } catch (error) {
-    //   return;
-    // }
-    
+  const addStage = async (subjectId: number) => {
     setSubjects(prev => prev.map(s =>
       s.id !== subjectId ? s : {
         ...s,
-       // id: subjectId,
         isModified: !s.isNew,
         stages: [
           ...s.stages,
@@ -238,7 +253,8 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
         ]
       }
     ));
-  }
+  };
+
   const updateStage = (subjectId: number, stageId: number, field: string, value: any) => {
     const subject = subjects.find(s => s.id === subjectId);
     if (!subject) return;
@@ -248,18 +264,17 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
         ...s,
         stages: s.stages.map((st: PlanningStepTemplate) => {
           if (st.id !== stageId) return st;
-
           if (field === 'workHours') {
             const h = Math.max(0, Number(value));
-            return { ...st, workHours: h, workDays: h / WORK_HOURS_PER_DAY };
+            return { ...st, workHours: h, workDays: h / WORK_HOURS_PER_DAY, isModified: !st.isNew };
           }
           if (field === 'workDays') {
             const d = Math.max(0, Number(value));
-            return { ...st, workDays: d, workHours: d * WORK_HOURS_PER_DAY };
+            return { ...st, workDays: d, workHours: d * WORK_HOURS_PER_DAY, isModified: !st.isNew };
           }
           if (field === 'stepDuration') {
             const newDuration = Math.max(0, Math.floor(Number(value)));
-            return { ...st, stepDuration: newDuration };
+            return { ...st, stepDuration: newDuration, isModified: !st.isNew };
           }
           if (field === 'stepPercentage') {
             const newPct = Math.max(0, Math.min(100, Number(value)));
@@ -268,17 +283,16 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
               .reduce((acc: number, x: PlanningStepTemplate) => acc + x.stepPercentage, 0);
             if (otherSum + newPct > 100) {
               setMessageBox({
-                isOpen: true,
-                title: 'אזהרה',
+                isOpen: true, title: 'אזהרה',
                 message: `סה"כ אחוזים לא יכול לעבור 100%. כרגע: ${(otherSum + newPct).toFixed(1)}%`,
                 type: 'warning'
               });
               return st;
             }
-            return { ...st, stepPercentage: newPct };
+            return { ...st, stepPercentage: newPct, isModified: !st.isNew };
           }
           if (field === 'dependsOnStepId') {
-            return { ...st, dependsOnStepId: value === '' ? null : Number(value), isModified: !st.isNew };
+            return { ...st, dependsOnStepId: value, isModified: !st.isNew };
           }
           return { ...st, [field]: value, isModified: !st.isNew };
         })
@@ -289,12 +303,11 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
   const deleteStage = async (subjectId: number, stageId: number) => {
     const confirmed = await openConfirm('האם אתה בטוח שברצונך למחוק שלב זה?');
     if (!confirmed) return;
-
     setSubjects(prev => prev.map(s =>
-      s.id !== subjectId ? s : { 
-        ...s, 
+      s.id !== subjectId ? s : {
+        ...s,
         isModified: !s.isNew,
-        stages: s.stages.map(st => 
+        stages: s.stages.map(st =>
           st.id === stageId ? (st.isNew ? st : { ...st, isDeleted: true }) : st
         ).filter(st => !(st.isNew && st.isDeleted))
       }
@@ -309,9 +322,7 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
           st.id !== stageId ? st : {
             ...st,
             tasks: st.tasks.map((t: PlanningTaskTemplate) =>
-              t.taskDuration > st.stepDuration
-                ? { ...t, taskDuration: st.stepDuration }
-                : t
+              t.taskDuration > st.stepDuration ? { ...t, taskDuration: st.stepDuration } : t
             )
           }
         )
@@ -321,13 +332,6 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
 
   // ─── Task actions ──────────────────────────────────────────────────────────
   const addTask = async (subjectId: number, stageId: number) => {
-    // try {
-    //   // Ensure stage is saved if it's new
-    //   stageId = await ensureStageSaved(subjectId, stageId);
-    // } catch (error) {
-    //   return;
-    // }
-    
     setSubjects(prev => prev.map(s =>
       s.id !== subjectId ? s : {
         ...s,
@@ -351,7 +355,6 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
                 dependsOnTaskId: null,
                 isNew: true,
                 employees: [],
-              
               }
             ]
           }
@@ -360,41 +363,97 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
     ));
   };
 
+  const getOtherTaskWorkHoursTotal = (stage: PlanningStepTemplate, taskId: number) =>
+    stage.tasks.filter((t: PlanningTaskTemplate) => t.id !== taskId).reduce((sum, t) => sum + t.workHours, 0);
+
+  const getOtherTaskPercentageTotal = (stage: PlanningStepTemplate, taskId: number) =>
+    stage.tasks.filter((t: PlanningTaskTemplate) => t.id !== taskId).reduce((sum, t) => sum + t.taskPercentage, 0);
+
+  const resolveStageHoursUpdate = async (
+    stage: PlanningStepTemplate, taskId: number, nextTaskHours: number
+  ): Promise<{ shouldAbort: boolean; updatedStageHours: number | null }> => {
+    const otherTotal = getOtherTaskWorkHoursTotal(stage, taskId);
+    const total = otherTotal + nextTaskHours;
+    if (total <= stage.workHours) return { shouldAbort: false, updatedStageHours: null };
+    const yes = await openConfirm(
+      `סה"כ השעות במשימות (${total.toFixed(2)}) גדול משעות השלב (${stage.workHours}).\n\nהאם לעדכן את שעות השלב?`
+    );
+    if (!yes) return { shouldAbort: true, updatedStageHours: null };
+    return { shouldAbort: false, updatedStageHours: total };
+  };
+
   const updateTask = async (subjectId: number, stageId: number, taskId: number, field: string, value: any) => {
     const stage = getStage(subjectId, stageId);
     if (!stage) return;
 
     let updatedStageHours: number | null = null;
     let nextTaskWorkHours: number | null = null;
-    let nextTaskWorkDays: number | null = null;
+    let nextTaskWorkDays:  number | null = null;
+    let nextTaskPercentage: number | null = null;
+    let nextTaskDuration:  number | null = null;
 
-    if (field === 'workHours') {
-      const newH = Math.max(0, Number(value));
-      const otherH = stage.tasks.filter((x: PlanningTaskTemplate) => x.id !== taskId).reduce((a: number, x: PlanningTaskTemplate) => a + x.workHours, 0);
-      if (otherH + newH > stage.workHours) {
-        const yes = await openConfirm(
-          `סה"כ השעות במשימות (${(otherH + newH).toFixed(2)}) גדול משעות השלב (${stage.workHours}).\n\nהאם לעדכן את שעות השלב?`
-        );
-        if (!yes) return;
-        updatedStageHours = otherH + newH;
+    switch (field) {
+      case 'workHours': {
+        const nextHours = Math.max(0, Number(value));
+        const r = await resolveStageHoursUpdate(stage, taskId, nextHours);
+        if (r.shouldAbort) return;
+        updatedStageHours = r.updatedStageHours;
+        nextTaskWorkHours = nextHours;
+        nextTaskWorkDays  = nextHours / WORK_HOURS_PER_DAY;
+        break;
       }
-      nextTaskWorkHours = newH;
-      nextTaskWorkDays = newH / WORK_HOURS_PER_DAY;
-    }
-
-    if (field === 'workDays') {
-      const newD = Math.max(0, Number(value));
-      const newH = newD * WORK_HOURS_PER_DAY;
-      const otherH = stage.tasks.filter((x: PlanningTaskTemplate) => x.id !== taskId).reduce((a: number, x: PlanningTaskTemplate) => a + x.workHours, 0);
-      if (otherH + newH > stage.workHours) {
-        const yes = await openConfirm(
-          `סה"כ השעות במשימות (${(otherH + newH).toFixed(2)}) גדול משעות השלב (${stage.workHours}).\n\nהאם לעדכן את שעות השלב?`
-        );
-        if (!yes) return;
-        updatedStageHours = otherH + newH;
+      case 'workDays': {
+        const nextDays  = Math.max(0, Number(value));
+        const nextHours = nextDays * WORK_HOURS_PER_DAY;
+        const r = await resolveStageHoursUpdate(stage, taskId, nextHours);
+        if (r.shouldAbort) return;
+        updatedStageHours = r.updatedStageHours;
+        nextTaskWorkHours = nextHours;
+        nextTaskWorkDays  = nextDays;
+        break;
       }
-      nextTaskWorkHours = newH;
-      nextTaskWorkDays = newD;
+      case 'taskWorkHours': {
+        const nextHours = Math.max(0, Number(value));
+        const r = await resolveStageHoursUpdate(stage, taskId, nextHours);
+        if (r.shouldAbort) return;
+        updatedStageHours  = r.updatedStageHours;
+        nextTaskWorkHours  = nextHours;
+        nextTaskWorkDays   = nextHours / WORK_HOURS_PER_DAY;
+        nextTaskPercentage = stage.workHours > 0 ? (nextHours / stage.workHours) * 100 : 0;
+        break;
+      }
+      case 'taskWorkDays': {
+        const nextDays  = Math.max(0, Number(value));
+        const nextHours = nextDays * WORK_HOURS_PER_DAY;
+        const r = await resolveStageHoursUpdate(stage, taskId, nextHours);
+        if (r.shouldAbort) return;
+        updatedStageHours  = r.updatedStageHours;
+        nextTaskWorkHours  = nextHours;
+        nextTaskWorkDays   = nextDays;
+        nextTaskPercentage = stage.workHours > 0 ? (nextHours / stage.workHours) * 100 : 0;
+        break;
+      }
+      case 'taskPercentage': {
+        const newPct    = Math.max(0, Math.min(100, Number(value)));
+        const otherSum  = getOtherTaskPercentageTotal(stage, taskId);
+        if (otherSum + newPct > 100) {
+          setMessageBox({ isOpen: true, title: 'אזהרה', message: `סה"כ אחוזים לא יכול לעבור 100%. כרגע: ${(otherSum + newPct).toFixed(1)}%`, type: 'warning' });
+          return;
+        }
+        nextTaskPercentage = newPct;
+        nextTaskWorkHours  = (stage.workHours * newPct) / 100;
+        nextTaskWorkDays   = nextTaskWorkHours / WORK_HOURS_PER_DAY;
+        break;
+      }
+      case 'taskDuration': {
+        nextTaskDuration = Math.max(0, Math.floor(Number(value)));
+        if (nextTaskDuration > stage.stepDuration) {
+          setMessageBox({ isOpen: true, title: 'אזהרה', message: `משך זמן המשימה (${nextTaskDuration}) לא יכול לעבור את משך זמן השלב (${stage.stepDuration}).`, type: 'warning' });
+          return;
+        }
+        break;
+      }
+      default: break;
     }
 
     setSubjects(prev => prev.map(s =>
@@ -403,49 +462,19 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
         stages: s.stages.map((st: PlanningStepTemplate) =>
           st.id !== stageId ? st : {
             ...st,
-            ...(updatedStageHours !== null
-              ? { workHours: updatedStageHours, workDays: updatedStageHours / WORK_HOURS_PER_DAY }
-              : {}),
+            ...(updatedStageHours !== null ? { workHours: updatedStageHours, workDays: updatedStageHours / WORK_HOURS_PER_DAY } : {}),
             tasks: st.tasks.map((t: PlanningTaskTemplate) => {
               if (t.id !== taskId) return t;
-
-              if (field === 'workHours') {
-                return { ...t, workHours: nextTaskWorkHours ?? t.workHours, workDays: nextTaskWorkDays ?? t.workDays, isModified: !t.isNew };
+              switch (field) {
+                case 'workHours':     return { ...t, workHours: nextTaskWorkHours ?? t.workHours, workDays: nextTaskWorkDays ?? t.workDays, isModified: !t.isNew };
+                case 'workDays':      return { ...t, workDays: nextTaskWorkDays ?? t.workDays, workHours: nextTaskWorkHours ?? t.workHours, isModified: !t.isNew };
+                case 'taskWorkHours':
+                case 'taskWorkDays':  return { ...t, workHours: nextTaskWorkHours ?? t.workHours, workDays: nextTaskWorkDays ?? t.workDays, taskPercentage: nextTaskPercentage ?? t.taskPercentage, isModified: !t.isNew };
+                case 'taskDuration':  return { ...t, taskDuration: nextTaskDuration ?? t.taskDuration };
+                case 'taskPercentage':return { ...t, taskPercentage: nextTaskPercentage ?? t.taskPercentage, workHours: nextTaskWorkHours ?? t.workHours, workDays: nextTaskWorkDays ?? t.workDays, isModified: !t.isNew };
+                case 'dependsOnTaskId': return { ...t, dependsOnTaskId: value, isModified: !t.isNew };
+                default: return { ...t, [field]: value, isModified: !t.isNew };
               }
-              if (field === 'workDays') {
-                return { ...t, workDays: nextTaskWorkDays ?? t.workDays, workHours: nextTaskWorkHours ?? t.workHours, isModified: !t.isNew };
-              }
-              if (field === 'taskDuration') {
-                const newDuration = Math.max(0, Math.floor(Number(value)));
-                if (newDuration > stage.stepDuration) {
-                  setMessageBox({
-                    isOpen: true,
-                    title: 'אזהרה',
-                    message: `משך זמן המשימה (${newDuration}) לא יכול לעבור את משך זמן השלב (${stage.stepDuration}).`,
-                    type: 'warning'
-                  });
-                  return t;
-                }
-                return { ...t, taskDuration: newDuration };
-              }
-              if (field === 'taskPercentage') {
-                const newPct = Math.max(0, Math.min(100, Number(value)));
-                const otherSum = stage.tasks.filter((x: PlanningTaskTemplate) => x.id !== taskId).reduce((a: number, x: PlanningTaskTemplate) => a + x.taskPercentage, 0);
-                if (otherSum + newPct > 100) {
-                  setMessageBox({
-                    isOpen: true,
-                    title: 'אזהרה',
-                    message: `סה"כ אחוזים לא יכול לעבור 100%. כרגע: ${(otherSum + newPct).toFixed(1)}%`,
-                    type: 'warning'
-                  });
-                  return t;
-                }
-                return { ...t, taskPercentage: newPct };
-              }
-              if (field === 'dependsOnTaskId') {
-                return { ...t, dependsOnTaskId: value === '' ? null : Number(value), isModified: !t.isNew };
-              }
-              return { ...t, [field]: value, isModified: !t.isNew };
             })
           }
         )
@@ -459,8 +488,8 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
         ...s,
         isModified: !s.isNew,
         stages: s.stages.map((st: PlanningStepTemplate) =>
-          st.id !== stageId ? st : { 
-            ...st, 
+          st.id !== stageId ? st : {
+            ...st,
             isModified: !st.isNew,
             tasks: st.tasks.map((t: PlanningTaskTemplate) =>
               t.id === taskId ? (t.isNew ? t : { ...t, isDeleted: true }) : t
@@ -474,6 +503,83 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
       }
     ));
 
+  const moveTaskRow = (subjectId: number, stageId: number, draggedTaskId: number, targetTaskId: number) => {
+    if (draggedTaskId === targetTaskId) return;
+
+    setSubjects(prev => prev.map((s: PlanningSubjectTemplate) =>
+      s.id !== subjectId ? s : {
+        ...s,
+        isModified: !s.isNew,
+        stages: s.stages.map((st: PlanningStepTemplate) => {
+          if (st.id !== stageId) return st;
+
+          const visibleTasks = st.tasks.filter((t: PlanningTaskTemplate) => !t.isDeleted);
+          const hiddenTasks = st.tasks.filter((t: PlanningTaskTemplate) => t.isDeleted);
+          const fromIndex = visibleTasks.findIndex((t: PlanningTaskTemplate) => t.id === draggedTaskId);
+          const toIndex = visibleTasks.findIndex((t: PlanningTaskTemplate) => t.id === targetTaskId);
+
+          if (fromIndex < 0 || toIndex < 0) return st;
+
+          const reordered = [...visibleTasks];
+          const [moved] = reordered.splice(fromIndex, 1);
+          if (!moved) return st;
+          reordered.splice(toIndex, 0, {
+            ...moved,
+            // After reordering, remove task dependency as requested.
+            dependsOnTaskId: false,
+            isModified: !moved.isNew,
+          });
+
+          const withOrder = reordered.map((t: PlanningTaskTemplate, idx: number) => ({
+            ...t,
+            orderNum: idx + 1,
+          }));
+
+          return {
+            ...st,
+            isModified: !st.isNew,
+            tasks: [...withOrder, ...hiddenTasks],
+          };
+        }),
+      }
+    ));
+  };
+
+  const moveStageRow = (subjectId: number, draggedStageId: number, targetStageId: number) => {
+    if (draggedStageId === targetStageId) return;
+
+    setSubjects(prev => prev.map((s: PlanningSubjectTemplate) => {
+      if (s.id !== subjectId) return s;
+
+      const visibleStages = s.stages.filter((st: PlanningStepTemplate) => !st.isDeleted);
+      const hiddenStages = s.stages.filter((st: PlanningStepTemplate) => st.isDeleted);
+      const fromIndex = visibleStages.findIndex((st: PlanningStepTemplate) => st.id === draggedStageId);
+      const toIndex = visibleStages.findIndex((st: PlanningStepTemplate) => st.id === targetStageId);
+      if (fromIndex < 0 || toIndex < 0) return s;
+
+      const reordered = [...visibleStages];
+      const [moved] = reordered.splice(fromIndex, 1);
+      if (!moved) return s;
+      reordered.splice(toIndex, 0, {
+        ...moved,
+        // After reordering, remove stage dependency as requested.
+        dependsOnStepId: false,
+        isModified: !moved.isNew,
+      });
+
+      const withOrder = reordered.map((st: PlanningStepTemplate, idx: number) => ({
+        ...st,
+        orderNum: idx + 1,
+      }));
+
+      return {
+        ...s,
+        isModified: !s.isNew,
+        stages: [...withOrder, ...hiddenStages],
+      };
+    }));
+  };
+
   // ─── Employee save handlers ────────────────────────────────────────────────
   const saveStageEmployees = (subjectId: number, stageId: number, links: EmployeeLink[]) => {
     const prevStage = getStage(subjectId, stageId);
@@ -482,19 +588,12 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
     const deletedEmployeeIds = [...prevEmployeeIds].filter(id => !nextEmployeeIds.has(id));
 
     const mapped: PlanningStepEmployeeLinkTemplate[] = links.map(l => ({
-      id: l.id,
-      linkId: l.linkId,
-      employeeId: l.employeeId,
-      employeeName: l.employeeName,
+      id: l.id, linkId: l.linkId, employeeId: l.employeeId, employeeName: l.employeeName,
       planningStepTemplateId: stageId,
-      percentage: l.percentage,
-      workHours: l.workHours,
-      workDays: l.workDays,
-      taskDuration: l.duration,
-      isNew: l.isNew,
-      isModified: l.isModified,
-      isDeleted: l.isDeleted,
+      percentage: l.percentage, workHours: l.workHours, workDays: l.workDays, taskDuration: l.duration,
+      isNew: l.isNew, isModified: l.isModified, isDeleted: l.isDeleted,
     }));
+
     setSubjects(prev => prev.map((s: PlanningSubjectTemplate) =>
       s.id !== subjectId ? s : {
         ...s,
@@ -518,19 +617,12 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
     const deletedEmployeeIds = [...prevEmployeeIds].filter(id => !nextEmployeeIds.has(id));
 
     const mapped: PlanningTaskEmployeeLinkTemplate[] = links.map(l => ({
-      id: 0,
-      employeeId: 0,
-      linkId: l.linkId,
-      employeeName: l.employeeName,
+      id: 0, employeeId: 0, linkId: l.linkId, employeeName: l.employeeName,
       planningTaskTemplateId: taskId,
-      percentage: l.percentage,
-      workHours: l.workHours,
-      workDays: l.workDays,
-      taskDuration: l.duration,
-      isNew: l.isNew,
-      isModified: l.isModified,
-      isDeleted: l.isDeleted,
+      percentage: l.percentage, workHours: l.workHours, workDays: l.workDays, taskDuration: l.duration,
+      isNew: l.isNew, isModified: l.isModified, isDeleted: l.isDeleted,
     }));
+
     setSubjects(prev => prev.map((s: PlanningSubjectTemplate) =>
       s.id !== subjectId ? s : {
         ...s,
@@ -554,18 +646,7 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
   };
 
   // ─── Modal ─────────────────────────────────────────────────────────────────
-  const openModal = async (type: 'stage' | 'task', subjectId: number, stageId: number, taskId?: number) =>{
-    // try {
-    //   if(type === 'stage')
-    //   // Ensure subject is saved if it's new
-    //   stageId = await ensureStageSaved(subjectId, stageId);
-      
-    //  else if(type === 'task')
-    //   // Ensure stage is saved if it's new
-    // } catch (error) {
-    //   return;
-    // }
-    
+  const openModal = async (type: 'stage' | 'task', subjectId: number, stageId: number, taskId?: number) => {
     setModalState({ open: true, type, subjectId, stageId, taskId });
   };
 
@@ -577,15 +658,10 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
       if (!st) return null;
       return {
         itemType: 'stage' as const,
-        stageName: st.stepName,
-        stageDuration: st.stepDuration,
-        stageHours: st.workHours,
+        stageName: st.stepName, stageDuration: st.stepDuration, stageHours: st.workHours,
         initialEmployees: st.employees.map(e => ({
-          employeeId: e.employeeId,
-          linkId:e.linkId,
-          id: e.id, employeeName: e.employeeName,
-          percentage: e.percentage, workHours: e.workHours,
-          workDays: e.workDays, duration: e.taskDuration,
+          employeeId: e.employeeId, linkId: e.linkId, id: e.id, employeeName: e.employeeName,
+          percentage: e.percentage, workHours: e.workHours, workDays: e.workDays, duration: e.taskDuration,
         })),
         onSave: (links: EmployeeLink[]) => saveStageEmployees(subjectId, stageId, links),
       };
@@ -594,16 +670,10 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
       if (!t) return null;
       return {
         itemType: 'task' as const,
-        stageName: t.taskName,
-        stageDuration: t.taskDuration,
-        stageHours: t.workHours,
+        stageName: t.taskName, stageDuration: t.taskDuration, stageHours: t.workHours,
         initialEmployees: t.employees.map(e => ({
-          employeeId: e.employeeId,
-          linkId:e.linkId,
-          id: e.id,
-          employeeName: e.employeeName,
-          percentage: e.percentage, workHours: e.workHours,
-          workDays: e.workDays, duration: e.taskDuration,
+          employeeId: e.employeeId, linkId: e.linkId, id: e.id, employeeName: e.employeeName,
+          percentage: e.percentage, workHours: e.workHours, workDays: e.workDays, duration: e.taskDuration,
         })),
         onSave: (links: EmployeeLink[]) => saveTaskEmployees(subjectId, stageId, taskId!, links),
       };
@@ -611,14 +681,7 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
   };
 
   const modalProps = modalState?.open ? getModalProps() : null;
-const employeeCountForStage = (stage: PlanningStepTemplate): number => {
-  const stageEmployeeIds = new Set(stage.employees.filter(e => !e.isDeleted).map(e => e.employeeId));
-  const taskEmployeeIds = new Set(
-    stage.tasks.flatMap(t => t.employees.filter(e => !e.isDeleted).map(e => e.employeeId))
-  );
-  const allUniqueIds = new Set([...stageEmployeeIds, ...taskEmployeeIds]);
-  return allUniqueIds.size;
-};
+
   // ─── Render ────────────────────────────────────────────────────────────────
   if (isLoading) {
     return (
@@ -632,6 +695,7 @@ const employeeCountForStage = (stage: PlanningStepTemplate): number => {
     <div className="space-y-4">
       {subjects.filter(s => !s.isDeleted).map((subject) => (
         <div key={subject.id} className="border border-gray-300 rounded-lg overflow-hidden">
+
           {/* Subject header */}
           <div className="bg-gray-100 px-4 py-3 flex items-center justify-between">
             <div className="flex items-center gap-3 flex-1">
@@ -639,8 +703,7 @@ const employeeCountForStage = (stage: PlanningStepTemplate): number => {
                 {subject.isExpanded ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
               </button>
               <input
-                type="text"
-                value={subject.name}
+                type="text" value={subject.name}
                 onChange={(e) => updateSubjectName(subject.id, e.target.value)}
                 className="font-bold text-lg px-3 py-1.5 border-2 border-gray-300 rounded flex-1 max-w-[450px] focus:ring-2 focus:ring-emerald-500"
               />
@@ -660,265 +723,323 @@ const employeeCountForStage = (stage: PlanningStepTemplate): number => {
 
           {subject.isExpanded && (
             <div className="p-4 space-y-3 bg-gray-50">
-              {subject.stages.filter(st => !st.isDeleted).map((stage, stageIndex) => (
 
-              <div key={stage.id} className="border-2 border-blue-300 rounded-lg bg-white">
-                {/* Stage header */}
-                <div className="bg-blue-100 px-3 py-2 flex items-center justify-between" >
-                <div className="flex items-center gap-3">
-                  <GripVertical size={18} className="text-gray-500 cursor-move" />
-                  <button onClick={() => toggleStage(subject.id, stage.id)}>
-                  {stage.isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                  </button>
-                  <span className="text-sm text-gray-600 font-semibold bg-gray-200 px-2 py-1 rounded">
-                  מספר: {stageIndex + 1}
-                  </span>
-                  <input
-                  type="text"
-                  value={stage.stepName}
-                  onChange={(e) => updateStage(subject.id, stage.id, 'stepName', e.target.value)}
-                  className="font-bold px-3 py-1 border-2 border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                  />
-                  <span className="bg-purple-500 text-white px-2 py-0.5 rounded-full text-xs font-bold">
-                  {stage.tasks.length} משימות
-                  </span>
-                  {(stage.employees.length > 0 || stage.tasks.some(task => task.employees.length > 0)) && (
-                  <span className="bg-blue-500 text-white px-2 py-0.5 rounded-full text-xs font-bold">
-                    {employeeCountForStage(stage)} עובדים
-                  </span>
+              {/* ── Stage column headers (once, above all stages) ── */}
+              {subject.stages.filter(st => !st.isDeleted).length > 0 && (
+                <div className="overflow-x-auto">
+                  <div className="min-w-[1160px]">
+                    <div className="grid grid-cols-[18px_18px_18px_50px_1fr_80px_110px_110px_90px_160px_120px_36px] gap-2 px-2 py-1.5 bg-blue-200 rounded-lg text-xs font-bold text-gray-700">
+                      <div />
+                      <div />
+                      <div />
+                      <div className="text-center">מספ׳</div>
+                      <div className="text-right">שם שלב</div>
+                      <div className="text-center">אחוז</div>
+                      <div className="text-center">שעות עבודה</div>
+                      <div className="text-center">ימי עבודה</div>
+                      <div className="text-center">משך (ימים)</div>
+                      <div className="text-center">תלוי בשלב</div>
+                      <div className="text-center">קישור עובדים</div>
+                      <div className="text-center">מחק</div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {[...subject.stages].filter(st => !st.isDeleted).sort(byOrderNum).map((stage, stageIndex) => (
+                <div key={stage.id} className="border-2 border-blue-300 rounded-lg bg-white overflow-hidden">
+
+                  {/* ── Single merged stage row ── */}
+                  <div
+                    className={`overflow-x-auto bg-blue-50 ${draggingStage?.stageId === stage.id ? 'ring-2 ring-blue-300' : ''}`}
+                    draggable
+                    onDragStart={(e) => {
+                      setDraggingStage({ subjectId: subject.id, stageId: stage.id });
+                      e.dataTransfer.effectAllowed = 'move';
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (!draggingStage) return;
+                      if (draggingStage.subjectId !== subject.id) return;
+                      moveStageRow(subject.id, draggingStage.stageId, stage.id);
+                      setDraggingStage(null);
+                    }}
+                    onDragEnd={() => setDraggingStage(null)}
+                  >
+                    <div className="min-w-[1160px]">
+                      <div className="grid grid-cols-[18px_18px_18px_50px_1fr_80px_110px_110px_90px_160px_120px_36px] gap-2 items-center px-2 py-2">
+
+                        {/* drag handle */}
+                        <GripVertical size={14} className="text-gray-400 cursor-grab active:cursor-grabbing" />
+
+                        {/* expand toggle */}
+                        <button onClick={() => toggleStage(subject.id, stage.id)} className="text-gray-500 hover:text-blue-600">
+                          {stage.isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        </button>
+
+                        {/* badges (tasks + employees) stacked */}
+                        <div className="flex flex-col gap-0.5 items-center">
+                          <span className="bg-purple-500 text-white px-1 rounded-full text-[9px] font-bold leading-tight whitespace-nowrap">
+                            {stage.tasks.length}
+                          </span>
+                          {(stage.employees.length > 0 || stage.tasks.some(t => t.employees.length > 0)) && (
+                            <span className="bg-blue-500 text-white px-1 rounded-full text-[9px] font-bold leading-tight whitespace-nowrap">
+                              {employeeCountForStage(stage)}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* stage number */}
+                        <div className="text-center text-sm font-bold text-gray-700 bg-gray-100 rounded py-1">{stageIndex + 1}</div>
+
+                        {/* stage name input */}
+                        <input
+                          type="text" value={stage.stepName}
+                          onChange={(e) => updateStage(subject.id, stage.id, 'stepName', e.target.value)}
+                          className="font-bold px-2 py-1 border-2 border-gray-300 rounded focus:ring-2 focus:ring-blue-500 text-sm w-full"
+                        />
+
+                        {/* step percentage */}
+                        <input
+                          type="number" min="0" max="100" step="0.01"
+                          value={parseFloat(stage.stepPercentage.toFixed(2))}
+                          onChange={(e) => updateStage(subject.id, stage.id, 'stepPercentage', e.target.value)}
+                          className="px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-blue-400"
+                        />
+
+                        {/* work hours */}
+                        <input
+                          type="number" step="0.01" min="0"
+                          value={stage.workHours}
+                          onChange={(e) => updateStage(subject.id, stage.id, 'workHours', e.target.value)}
+                          onBlur={(e) => updateStage(subject.id, stage.id, 'workHours', parseFloat(parseFloat(e.target.value).toFixed(2)) || 0)}
+                          className="px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-blue-400"
+                        />
+
+                        {/* work days */}
+                        <input
+                          type="number" step="0.01" min="0"
+                          value={stage.workDays}
+                          onChange={(e) => updateStage(subject.id, stage.id, 'workDays', e.target.value)}
+                          onBlur={(e) => updateStage(subject.id, stage.id, 'workDays', parseFloat(parseFloat(e.target.value).toFixed(2)) || 0)}
+                          className="px-2 py-1 border-2 border-emerald-300 rounded text-sm text-center bg-emerald-50 font-bold focus:ring-2 focus:ring-emerald-500"
+                        />
+
+                        {/* step duration */}
+                        <input
+                          type="number" min="0" step="1"
+                          value={stage.stepDuration}
+                          onChange={(e) => updateStage(subject.id, stage.id, 'stepDuration', e.target.value)}
+                          onBlur={() => capTaskDurations(subject.id, stage.id)}
+                          className="px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-blue-400"
+                        />
+
+                        {/* depends on step */}
+                        <div className="flex items-center justify-center">
+                          <input
+                            type="checkbox"
+                            disabled={(stage.orderNum ?? 0) === 1}
+                            checked={stage.dependsOnStepId ?? false}
+                            onChange={e => updateStage(subject.id, stage.id, 'dependsOnStepId', e.target.checked)}
+                            className="w-4 h-4 accent-blue-500"
+                            title="תלוי שלב"
+                          />
+                        </div>
+
+                        {/* link employees */}
+                        <button
+                          onClick={() => openModal('stage', subject.id, stage.id)}
+                          className="flex items-center justify-center gap-1 px-2 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs font-bold shadow-sm"
+                        >
+                          <Users size={13} />
+                          קישור
+                          {(stage.employees.length > 0 || stage.tasks.some(t => t.employees.length > 0)) && (
+                            <span className="bg-white text-blue-700 rounded-full px-1.5 text-[10px] font-bold">
+                              {employeeCountForStage(stage)}
+                            </span>
+                          )}
+                        </button>
+
+                        {/* delete */}
+                        <button onClick={() => deleteStage(subject.id, stage.id)} className="p-1 text-red-500 hover:bg-red-100 rounded flex items-center justify-center">
+                          <Trash2 size={14} />
+                        </button>
+
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Tasks */}
+                  {stage.isExpanded && (
+                    <div className="p-3 bg-purple-50">
+                      <div className="overflow-x-auto">
+                        <div className="min-w-[1100px]">
+                          {/* Task column headers */}
+                          <div className="grid grid-cols-[40px_50px_1fr_80px_110px_110px_90px_160px_120px_60px] gap-2 px-2 py-2 bg-purple-200 rounded-lg text-xs font-bold text-gray-700">
+                            <div></div>
+                            <div className="text-center">מספ׳</div>
+                            <div className="text-right">שם משימה</div>
+                            <div className="text-center">אחוז</div>
+                            <div className="text-center">שעות עבודה</div>
+                            <div className="text-center">ימי עבודה</div>
+                            <div className="text-center">משך זמן בימים</div>
+                            <div className="text-center">תלוי במשימה</div>
+                            <div className="text-center">קישור עובדים</div>
+                            <div className="text-center">מחק</div>
+                          </div>
+
+                          {[...stage.tasks].filter(t => !t.isDeleted).sort(byOrderNum).map((task, taskIndex) => (
+                            <div
+                              key={task.id}
+                              draggable
+                              onDragStart={(e) => {
+                                setDraggingTask({ subjectId: subject.id, stageId: stage.id, taskId: task.id });
+                                e.dataTransfer.effectAllowed = 'move';
+                              }}
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                e.dataTransfer.dropEffect = 'move';
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                if (!draggingTask) return;
+                                if (draggingTask.subjectId !== subject.id || draggingTask.stageId !== stage.id) return;
+                                moveTaskRow(subject.id, stage.id, draggingTask.taskId, task.id);
+                                setDraggingTask(null);
+                              }}
+                              onDragEnd={() => setDraggingTask(null)}
+                              className={`grid grid-cols-[40px_50px_1fr_80px_110px_110px_90px_160px_120px_60px] gap-2 items-center px-2 py-2 bg-white border-b border-purple-200 rounded ${
+                                draggingTask?.taskId === task.id ? 'opacity-60 ring-2 ring-purple-300' : ''
+                              }`}
+                            >
+                              <GripVertical size={16} className="text-gray-400 cursor-grab active:cursor-grabbing" />
+                              <div className="text-center text-sm font-bold text-gray-700 bg-gray-100 rounded py-1">{taskIndex + 1}</div>
+                              <input
+                                type="text" value={task.taskName}
+                                onChange={(e) => updateTask(subject.id, stage.id, task.id, 'taskName', e.target.value)}
+                                className="px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-purple-400"
+                              />
+                              <input
+                                type="number" min="0" max="100" step="0.01"
+                                value={parseFloat(task.taskPercentage.toFixed(2))}
+                                onChange={(e) => updateTask(subject.id, stage.id, task.id, 'taskPercentage', e.target.value)}
+                                className="px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-purple-400"
+                              />
+                              <input
+                                type="number" step="0.01" min="0"
+                                value={task.workHours}
+                                onChange={(e) => updateTask(subject.id, stage.id, task.id, 'taskWorkHours', e.target.value)}
+                                onBlur={(e) => updateTask(subject.id, stage.id, task.id, 'taskWorkHours', parseFloat(parseFloat(e.target.value).toFixed(2)) || 0)}
+                                className="px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-purple-400"
+                              />
+                              <input
+                                type="number" step="0.01" min="0"
+                                value={task.workDays}
+                                onChange={(e) => updateTask(subject.id, stage.id, task.id, 'taskWorkDays', e.target.value)}
+                                onBlur={(e) => updateTask(subject.id, stage.id, task.id, 'taskWorkDays', parseFloat(parseFloat(e.target.value).toFixed(2)) || 0)}
+                                className="px-2 py-1 border-2 border-emerald-300 rounded text-sm text-center bg-emerald-50 font-bold focus:ring-2 focus:ring-emerald-500"
+                              />
+                              <input
+                                type="number" min="0" step="1"
+                                value={task.taskDuration}
+                                onChange={(e) => updateTask(subject.id, stage.id, task.id, 'taskDuration', e.target.value)}
+                                className="px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-purple-400"
+                              />
+                              <div className="flex items-center justify-center">
+                                <input
+                                  type="checkbox"
+                                  disabled={(task.orderNum ?? 0) === 1}
+                                  checked={task.dependsOnTaskId ?? false}
+                                  onChange={e => updateTask(subject.id, stage.id, task.id, 'dependsOnTaskId', e.target.checked)}
+                                  className="w-4 h-4 accent-blue-500"
+                                  title="תלוי משימה"
+                                />
+                              </div>
+                              <button
+                                onClick={() => openModal('task', subject.id, stage.id, task.id)}
+                                className="flex items-center justify-center gap-1 px-2 py-1.5 bg-purple-600 text-white rounded hover:bg-purple-700 text-xs font-bold shadow-sm"
+                              >
+                                <Users size={14} />
+                                קישור
+                                {task.employees.length > 0 && (
+                                  <span className="bg-white text-purple-700 rounded-full px-1.5 text-[10px] font-bold">{task.employees.length}</span>
+                                )}
+                              </button>
+                              <button onClick={() => deleteTask(subject.id, stage.id, task.id)} className="p-1 text-red-500 hover:bg-red-50 rounded mx-auto">
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          ))}
+
+                          {stage.tasks.filter(t => !t.isDeleted).length > 0 && (
+                            <div className="grid grid-cols-[40px_50px_1fr_80px_110px_110px_90px_160px_120px_60px] gap-2 items-center px-2 py-2 bg-blue-100 font-bold border-t-2 border-blue-300 rounded">
+                              <div></div><div></div>
+                              <div className="text-right px-2 text-blue-800">סה"כ</div>
+                              <div className="text-center text-blue-700">
+                                {stage.tasks.filter(t => !t.isDeleted).reduce((s, t) => s + t.taskPercentage, 0).toFixed(2)}%
+                              </div>
+                              <div className="text-center text-blue-700">
+                                {stage.tasks.filter(t => !t.isDeleted).reduce((s, t) => s + t.workHours, 0).toFixed(2)}
+                              </div>
+                              <div className="text-center text-blue-700">
+                                {stage.tasks.filter(t => !t.isDeleted).reduce((s, t) => s + t.workDays, 0).toFixed(2)}
+                              </div>
+                              <div className="text-center text-gray-400">-</div>
+                              <div className="text-center text-gray-400">-</div>
+                              <div className="text-center text-gray-400">-</div>
+                              <div></div>
+                            </div>
+                          )}
+
+                          <button
+                            onClick={() => addTask(subject.id, stage.id)}
+                            className="w-full py-2 border-2 border-dashed border-purple-400 text-purple-700 hover:bg-purple-100 rounded text-sm font-bold mt-2 transition-all"
+                          >
+                            + הוסף משימה
+                          </button>
+                        </div>
+                      </div>
+                    </div>
                   )}
                 </div>
-                <button onClick={() => deleteStage(subject.id, stage.id)} className="p-1 text-red-500 hover:bg-red-100 rounded">
-                  <Trash2 size={16} />
-                </button>
-                </div>
-
-                {/* Stage data row */}
-                <div className="px-3 py-2 bg-blue-50">
-                <div className="overflow-x-auto">
-                  <div className="min-w-[1100px]">
-                  {/* Stage column headers */}
-                  <div className="grid grid-cols-[40px_50px_1fr_80px_110px_110px_90px_160px_120px] gap-2 px-2 py-2 bg-blue-200 rounded-lg text-xs font-bold text-gray-700">
-                    <div></div>
-                    <div className="text-center">מספ׳</div>
-                    <div className="text-right">שם שלב</div>
-                    <div className="text-center">אחוז</div>
-                    <div className="text-center">שעות עבודה</div>
-                    <div className="text-center">ימי עבודה</div>
-                    <div className="text-center">משך זמן</div>
-                    <div className="text-center">תלוי בשלב</div>
-                    <div className="text-center">קישור עובדים</div>
-                  </div>
-                  {/* Stage data */}
-                  <div className="grid grid-cols-[40px_50px_1fr_80px_110px_110px_90px_160px_120px] gap-2 items-center px-2 py-2 bg-white border-b-2 border-blue-300 rounded">
-                    <GripVertical size={16} className="text-gray-400 cursor-move" />
-                    <div className="text-center text-sm font-bold text-gray-700 bg-gray-100 rounded py-1">{stageIndex + 1}</div>
-                    <div className="px-2 py-1 text-sm font-bold bg-gray-100 border border-gray-300 rounded">{stage.stepName}</div>
-                    <input
-                    type="number" min="0" max="100"
-                    value={stage.stepPercentage}
-                    onChange={(e) => updateStage(subject.id, stage.id, 'stepPercentage', e.target.value)}
-                    className="px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-blue-400"
-                    />
-                    <input
-                    type="number" step="0.01" min="0"
-                    value={stage.workHours}
-                    onChange={(e) => updateStage(subject.id, stage.id, 'workHours', e.target.value)}
-                    className="px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-blue-400"
-                    />
-                    <input
-                    type="number" step="0.001" min="0"
-                    value={stage.workDays.toFixed(3)}
-                    onChange={(e) => updateStage(subject.id, stage.id, 'workDays', e.target.value)}
-                    className="px-2 py-1 border-2 border-emerald-300 rounded text-sm text-center bg-emerald-50 font-bold focus:ring-2 focus:ring-emerald-500"
-                    />
-                    <input
-                    type="number" min="0" step="1"
-                    value={stage.stepDuration}
-                    onChange={(e) => updateStage(subject.id, stage.id, 'stepDuration', e.target.value)}
-                    onBlur={() => capTaskDurations(subject.id, stage.id)}
-                    className="px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-blue-400"
-                    />
-                    {/* DependsOnStepID dropdown */}
-                    <select
-                    value={stage.dependsOnStepId ?? ''}
-                    onChange={(e) => updateStage(subject.id, stage.id, 'dependsOnStepId', e.target.value)}
-                    disabled={stageIndex === 0}
-                    className="px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100 disabled:text-gray-400"
-                    >
-                    <option value="">-</option>
-                    {getPriorStages(subject.id, stage.id).map(s => (
-                      <option key={s.id} value={s.id}>{s.stepName}</option>
-                    ))}
-                    </select>
-                    <button
-                    onClick={() => openModal('stage', subject.id, stage.id)}
-                    className="flex items-center justify-center gap-1 px-2 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs font-bold shadow-sm"
-                    >
-                    <Users size={14} />
-                    קישור
-                    {(stage.employees.length > 0 || stage.tasks.some(task => task.employees.length > 0)) && (
-                      <span className="bg-white text-blue-700 rounded-full px-1.5 text-[10px] font-bold">{employeeCountForStage(stage)}</span>
-                    // {(() => {
-                    //   const stageEmployeeIds = new Set(stage.employees.map(e => e.employeeId));
-                    //   const taskEmployeeIds = new Set(
-                    //     stage.tasks.flatMap(t => t.employees.map(e => e.employeeId))
-                    //   );
-                    //   const allUniqueIds = new Set([...stageEmployeeIds, ...taskEmployeeIds]);
-                    //   return allUniqueIds.size;
-                    // })()}
-                    )}
-                    </button>
-                  </div>
-                  </div>
-                </div>
-                </div>
-
-                {/* Tasks */}
-                {stage.isExpanded && (
-                <div className="p-3 bg-purple-50">
-                  <div className="overflow-x-auto">
-                  <div className="min-w-[1100px]">
-                    {/* Task column headers */}
-                    <div className="grid grid-cols-[40px_50px_1fr_80px_110px_110px_90px_160px_120px_60px] gap-2 px-2 py-2 bg-purple-200 rounded-lg text-xs font-bold text-gray-700">
-                    <div></div>
-                    <div className="text-center">מספ׳</div>
-                    <div className="text-right">שם משימה</div>
-                    <div className="text-center">אחוז</div>
-                    <div className="text-center">שעות עבודה</div>
-                    <div className="text-center">ימי עבודה</div>
-                    <div className="text-center">משך זמן</div>
-                    <div className="text-center">תלוי במשימה</div>
-                    <div className="text-center">קישור עובדים</div>
-                    <div className="text-center">מחק</div>
-                    </div>
-                    {stage.tasks.filter(t => !t.isDeleted).map((task, taskIndex) => (
-                    <div key={task.id} className="grid grid-cols-[40px_50px_1fr_80px_110px_110px_90px_160px_120px_60px] gap-2 items-center px-2 py-2 bg-white border-b border-purple-200 rounded">
-                      <GripVertical size={16} className="text-gray-400 cursor-move" />
-                      <div className="text-center text-sm font-bold text-gray-700 bg-gray-100 rounded py-1">{taskIndex + 1}</div>
-                      <input
-                      type="text"
-                      value={task.taskName}
-                      onChange={(e) => updateTask(subject.id, stage.id, task.id, 'taskName', e.target.value)}
-                      className="px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-purple-400"
-                      />
-                      <input
-                      type="number" min="0" max="100"
-                      value={task.taskPercentage}
-                      onChange={(e) => updateTask(subject.id, stage.id, task.id, 'taskPercentage', e.target.value)}
-                      className="px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-purple-400"
-                      />
-                      <input
-                      type="number" step="0.01" min="0"
-                      value={task.workHours}
-                      onChange={(e) => updateTask(subject.id, stage.id, task.id, 'workHours', e.target.value)}
-                      className="px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-purple-400"
-                      />
-                      <input
-                      type="number" step="0.001" min="0"
-                      value={task.workDays.toFixed(3)}
-                      onChange={(e) => updateTask(subject.id, stage.id, task.id, 'workDays', e.target.value)}
-                      className="px-2 py-1 border-2 border-emerald-300 rounded text-sm text-center bg-emerald-50 font-bold focus:ring-2 focus:ring-emerald-500"
-                      />
-                      <input
-                      type="number" min="0" step="1"
-                      value={task.taskDuration}
-                      onChange={(e) => updateTask(subject.id, stage.id, task.id, 'taskDuration', e.target.value)}
-                      className="px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-purple-400"
-                      />
-                      {/* DependsOnTaskID dropdown */}
-                      <select
-                      value={task.dependsOnTaskId ?? ''}
-                      onChange={(e) => updateTask(subject.id, stage.id, task.id, 'dependsOnTaskId', e.target.value)}
-                      disabled={taskIndex === 0}
-                      className="px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-purple-400 disabled:bg-gray-100 disabled:text-gray-400"
-                      >
-                      <option value="">-</option>
-                      {getPriorTasks(subject.id, stage.id, task.id).map(t => (
-                        <option key={t.id} value={t.id}>{t.taskName}</option>
-                      ))}
-                      </select>
-                      <button
-                      onClick={() => openModal('task', subject.id, stage.id, task.id)}
-                      className="flex items-center justify-center gap-1 px-2 py-1.5 bg-purple-600 text-white rounded hover:bg-purple-700 text-xs font-bold shadow-sm"
-                      >
-                      <Users size={14} />
-                      קישור
-                      {task.employees.length > 0 && (
-                        <span className="bg-white text-purple-700 rounded-full px-1.5 text-[10px] font-bold">{task.employees.length}</span>
-                      )}
-                      </button>
-                      <button onClick={() => deleteTask(subject.id, stage.id, task.id)} className="p-1 text-red-500 hover:bg-red-50 rounded mx-auto">
-                      <Trash2 size={14} />
-                      </button>
-                    </div>
-                    ))}
-
-                    {/* Tasks totals row */}
-                    {stage.tasks.length > 0 && (
-                    <div className="grid grid-cols-[40px_50px_1fr_80px_110px_110px_90px_160px_120px_60px] gap-2 items-center px-2 py-2 bg-blue-100 font-bold border-t-2 border-blue-300 rounded">
-                      <div></div><div></div>
-                      <div className="text-right px-2 text-blue-800">סה"כ</div>
-                      <div className="text-center text-blue-700">
-                      {stage.tasks.reduce((s, t) => s + t.taskPercentage, 0).toFixed(2)}%
-                      </div>
-                      <div className="text-center text-blue-700">
-                      {stage.tasks.reduce((s, t) => s + t.workHours, 0).toFixed(2)}
-                      </div>
-                      <div className="text-center text-blue-700">
-                      {stage.tasks.reduce((s, t) => s + t.workDays, 0).toFixed(3)}
-                      </div>
-                      <div className="text-center text-gray-400">-</div>
-                      <div className="text-center text-gray-400">-</div>
-                      <div className="text-center text-gray-400">-</div>
-                      <div></div>
-                    </div>
-                    )}
-
-                    <button
-                    onClick={() => addTask(subject.id, stage.id)}
-                    className="w-full py-2 border-2 border-dashed border-purple-400 text-purple-700 hover:bg-purple-100 rounded text-sm font-bold mt-2 transition-all"
-                    >
-                    + הוסף משימה
-                    </button>
-                  </div>
-                  </div>
-                </div>
-                )}
-              </div>
               ))}
 
               {/* Stages totals row */}
               {subject.stages.filter(st => !st.isDeleted).length > 0 && (
-              <div className="border-2 border-emerald-300 rounded-lg bg-emerald-50 p-3">
-                <div className="overflow-x-auto">
-                <div className="min-w-[1100px]">
-                  <div className="grid grid-cols-[40px_50px_1fr_80px_110px_110px_90px_160px_120px] gap-2 items-center px-2 py-2">
-                  <div></div><div></div>
-                  <div className="text-right font-bold text-emerald-800 px-2">סה"כ כל השלבים</div>
-                  <div className="text-center font-bold text-emerald-800 bg-emerald-100 rounded py-1">
-                    {subject.stages.filter(st => !st.isDeleted).reduce((s, st) => s + st.stepPercentage, 0).toFixed(2)}%
-                  </div>
-                  <div className="text-center font-bold text-emerald-800 bg-emerald-100 rounded py-1">
-                    {subject.stages.filter(st => !st.isDeleted).reduce((s, st) => s + st.workHours, 0).toFixed(2)}
-                  </div>
-                  <div className="text-center font-bold text-emerald-800 bg-emerald-100 rounded py-1">
-                    {subject.stages.filter(st => !st.isDeleted).reduce((s, st) => s + st.workDays, 0).toFixed(3)}
-                  </div>
-                  <div className="text-center text-gray-400">-</div>
-                  <div className="text-center text-gray-400">-</div>
-                  <div></div>
+                <div className="border-2 border-emerald-300 rounded-lg bg-emerald-50 ">
+                  <div className="overflow-x-auto">
+                    <div className="min-w-[1160px]">
+                      <div className="grid grid-cols-[18px_18px_18px_50px_1fr_80px_110px_110px_90px_160px_120px_36px] gap-2 items-center px-2 py-2">
+                        <div></div><div></div><div></div><div></div>
+                        <div className="text-right font-bold text-emerald-800 px-2">סה"כ כל השלבים</div>
+                        <div className="text-center font-bold text-emerald-800 bg-emerald-100 rounded py-1">
+                          {subject.stages.filter(st => !st.isDeleted).reduce((s, st) => s + st.stepPercentage, 0).toFixed(2)}%
+                        </div>
+                        <div className="text-center font-bold text-emerald-800 bg-emerald-100 rounded py-1">
+                          {subject.stages.filter(st => !st.isDeleted).reduce((s, st) => s + st.workHours, 0).toFixed(2)}
+                        </div>
+                        <div className="text-center font-bold text-emerald-800 bg-emerald-100 rounded py-1">
+                          {subject.stages.filter(st => !st.isDeleted).reduce((s, st) => s + st.workDays, 0).toFixed(2)}
+                        </div>
+                        <div className="text-center text-gray-400">-</div>
+                        <div className="text-center text-gray-400">-</div>
+                        <div></div>
+                        <div></div>
+                      </div>
+                    </div>
                   </div>
                 </div>
-                </div>
-              </div>
               )}
 
               <button
-              onClick={() => addStage(subject.id)}
-              className="w-full py-3 border-2 border-dashed border-blue-400 text-blue-700 hover:bg-blue-50 rounded font-bold transition-all"
+                onClick={() => addStage(subject.id)}
+                className="w-full py-3 border-2 border-dashed border-blue-400 text-blue-700 hover:bg-blue-50 rounded font-bold transition-all"
               >
-              + הוסף שלב
+                + הוסף שלב
               </button>
             </div>
           )}
@@ -954,15 +1075,10 @@ const employeeCountForStage = (stage: PlanningStepTemplate): number => {
           stageName={modalProps.stageName}
           stageDuration={modalProps.stageDuration}
           stageHours={modalProps.stageHours}
-         initialEmployees={modalProps.initialEmployees}
+          initialEmployees={modalProps.initialEmployees}
           hoursPerDay={WORK_HOURS_PER_DAY}
           onClose={() => setModalState(null)}
-          onSave={(links) => {
-            modalProps.onSave(links);
-            employeeCountForStage(getStage(modalState.subjectId, modalState.stageId)!) // update count in badge
-            
-            setModalState(null);
-          }}
+          onSave={(links) => { modalProps.onSave(links); setModalState(null); }}
         />
       )}
 
@@ -983,4 +1099,3 @@ const employeeCountForStage = (stage: PlanningStepTemplate): number => {
 });
 
 export default PlanningTopics;
-

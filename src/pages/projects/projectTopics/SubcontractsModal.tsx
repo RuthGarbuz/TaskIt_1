@@ -1,15 +1,6 @@
 import { useEffect, useState } from 'react';
 import { X, Search } from 'lucide-react';
-import type {  SubContract, SubContractLink } from '../../../Data/projectsData';
-
-
-
-// const SUBCONTRACTS: Subcontract[] = [
-//   { id: 1, contractName: 'חוזה ראשי א׳',  subcontractName: 'קבלן משנה א׳ — עבודות בניין' },
-//   { id: 2, contractName: 'חוזה ראשי א׳',  subcontractName: 'קבלן משנה ב׳ — חשמל'         },
-//   { id: 3, contractName: 'חוזה ראשי ב׳',  subcontractName: 'קבלן משנה ג׳ — אינסטלציה'    },
-//   { id: 4, contractName: 'חוזה ראשי ב׳',  subcontractName: 'קבלן משנה ד׳ — גבס ותקרות'   },
-// ];
+import type { SubContract, SubContractLink } from '../../../Data/projectsData';
 
 interface SubcontractsModalProps {
   subjectId: number;
@@ -17,7 +8,9 @@ interface SubcontractsModalProps {
   linkedIds: SubContractLink[];
   onSave: (ids: SubContractLink[]) => void;
   onClose: () => void;
-   subContractsOptions: SubContract[];
+  subContractsOptions: SubContract[];
+  // ✅ IDs that are already linked to OTHER subjects (not this one)
+  usedSubContractIds?: Set<number>;
 }
 
 export default function SubcontractsModal({
@@ -26,30 +19,30 @@ export default function SubcontractsModal({
   linkedIds,
   onSave,
   onClose,
-  subContractsOptions
+  subContractsOptions,
+  usedSubContractIds = new Set(),
 }: SubcontractsModalProps) {
   const [selected, setSelected] = useState<SubContractLink[]>(linkedIds);
   const [search, setSearch] = useState('');
 
-  const isSelected = (id: number) => selected.some(x => x.id === id);
-
-   useEffect(() => {
+  useEffect(() => {
     setSelected(linkedIds);
   }, [linkedIds]);
-  // const selectedIds = useMemo(
-  //   () => new Set(selected.map(x => Number(x.id))),
-  //   [selected]
-  // );
-  // const toggle = (item: SubContract) =>
-  //   setSelected(prev =>
-  //     prev.some(x => Number(x.id) === Number(item.id))
-  //       ? prev.filter(x => Number(x.id) !== Number(item.id))
-  //       : [...prev, { id: item.id, name: item.subcontractName, subjectId }]
-  //   );
 
-    const toggle = (id: number) =>
-        
-        setSelected(prev => prev.some(x => x.id === id) ? prev.filter(x => x.id !== id) : [...prev, { id, name: '', subjectId }]);
+  const isSelected = (id: number) => selected.some(x => x.id === id);
+
+  // A subcontract is disabled if it's linked to another subject (not this one)
+  const isDisabled = (id: number) => usedSubContractIds.has(id);
+
+  const toggle = (id: number) => {
+    if (isDisabled(id)) return; // blocked — already used elsewhere
+    setSelected(prev =>
+      prev.some(x => x.id === id)
+        ? prev.filter(x => x.id !== id)
+        : [...prev, { id, name: '', subjectId }]
+    );
+  };
+
   const filtered = subContractsOptions.filter(sc =>
     !search.trim() ||
     sc.contractName.includes(search) ||
@@ -101,35 +94,51 @@ export default function SubcontractsModal({
                   <td colSpan={3} className="px-4 py-8 text-center text-gray-400 text-sm">לא נמצאו תוצאות</td>
                 </tr>
               ) : (
-                filtered.map(sc => (
-                  <tr
-                    key={sc.id}
-                    onClick={() => toggle(sc.id)}
-                    className={`cursor-pointer transition-colors hover:bg-indigo-50 ${
-                      isSelected(sc.id) ? 'bg-indigo-50' : ''
-                    }`}
-                  >
-                    <td className="px-4 py-3 text-center">
-                      <input
-                        type="checkbox"
-                        checked={isSelected(sc.id)}
-                        onChange={() => toggle(sc.id)}
-                        onClick={e => e.stopPropagation()}
-                        className="w-4 h-4 accent-indigo-500"
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="text-xs font-semibold text-gray-700 bg-gray-100 px-2 py-1 rounded-lg">
-                        {sc.contractName}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`text-xs font-medium ${isSelected(sc.id) ? 'text-indigo-700 font-semibold' : 'text-gray-700'}`}>
-                        {sc.subcontractName}
-                      </span>
-                    </td>
-                  </tr>
-                ))
+                filtered.map(sc => {
+                  const disabled = isDisabled(sc.id);
+                  const checked  = isSelected(sc.id);
+                  return (
+                    <tr
+                      key={sc.id}
+                      onClick={() => toggle(sc.id)}
+                      className={`transition-colors ${
+                        disabled
+                          ? 'bg-gray-50 cursor-not-allowed opacity-50'
+                          : checked
+                            ? 'bg-indigo-50 cursor-pointer hover:bg-indigo-100'
+                            : 'cursor-pointer hover:bg-indigo-50'
+                      }`}
+                    >
+                      <td className="px-4 py-3 text-center">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={disabled}
+                          onChange={() => toggle(sc.id)}
+                          onClick={e => e.stopPropagation()}
+                          className="w-4 h-4 accent-indigo-500 disabled:cursor-not-allowed"
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-xs font-semibold text-gray-700 bg-gray-100 px-2 py-1 rounded-lg">
+                          {sc.contractName}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs font-medium ${checked ? 'text-indigo-700 font-semibold' : disabled ? 'text-gray-400' : 'text-gray-700'}`}>
+                            {sc.subcontractName}
+                          </span>
+                          {disabled && (
+                            <span className="text-[10px] bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded font-bold whitespace-nowrap">
+                              מקושר לנושא אחר
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>

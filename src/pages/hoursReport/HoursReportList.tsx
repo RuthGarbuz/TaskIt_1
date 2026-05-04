@@ -1,133 +1,194 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   Clock, Calendar, User, Briefcase,
-  ChevronDown, ChevronUp, Trash2, FileText, X,
+  ChevronDown, ChevronUp, Trash2, X, Edit2, Filter, List,
+  ChevronsUpDown,
 } from 'lucide-react';
 
-import HoursReportControls from './HoursReportControls';
-import HoursReportFilterModal, {
-  type HoursReportFilters,
-  EMPTY_FILTERS,
-  countActiveFilters,
-} from './HoursReportFilterModal';
-import { DEMO_REPORTS, formatDateHe, formatHours, getInitials, groupByDate, groupByEmployee, groupByProject, type HoursReportEntry } from '../../Data/HoursReportData';
+import HoursReportHeader from './HoursReportHeader';
+import HoursReportDbFilter, {
+  getDefaultHoursDBFilters,
+  countActiveHoursDbFilters,
+} from './HoursReportDbFilter';
+import { usePersistedHoursDbFilters } from '../../hooks/usePersistedHoursDbFilters';
+import {
+  formatDateHe, formatHours, getInitials,
+  groupByDate, groupByEmployee, groupByProject,
 
-type ViewMode = 'date' | 'employee' | 'project';
+  type HourReportList, type HourReportProject, type HourReportStep, type HoursReport,
+} from '../../Data/HoursReportData';
+import type { TaskReview } from '../../Data/projectsData';
+import HoursReportModal from './HoursReportModal';
+import { deleteHourReport, getHourReportProjects, getHourReportStepsByProjectId, getHourReports } from '../../services/hourReportService';
+import authService from '../../services/authService';
+import AutoComplete from '../shared/AutoComplete';
+import SearchableCheckboxFilter from '../shared/SearchableCheckboxFilter';
+import MyTasksReportModal, { type ReportColumn, type ReportRow } from '../tasks/MyTasksReportModal';
+
+type ViewMode = 'all' | 'date' | 'employee' | 'project';
+type HoursColumnFilterKey = 'dateTime' | 'projectName' | 'employeeName';
+
+// ─── Sort types ───────────────────────────────────────────────────────────────
+
+type SortKey =
+  | 'dateTime'
+  | 'taskName'
+  | 'stepName'
+  | 'subjectName'
+  | 'projectName'
+  | 'employeeName'
+  | 'hours';
+type SortDir = 'asc' | 'desc' | null;
+interface SortState { key: SortKey | null; dir: SortDir; }
+
+function hourReportSortValue(r: HourReportList, key: SortKey): string | number {
+  switch (key) {
+    case 'dateTime': return r.dateTime;
+    case 'taskName': return (r.taskName ?? '').trim();
+    case 'stepName': return (r.stepName ?? '').trim();
+    case 'subjectName': return (r.subjectName ?? '').trim();
+    case 'projectName': return r.projectName ?? '';
+    case 'employeeName': return r.employeeName ?? '';
+    case 'hours': return r.hours ?? 0;
+  }
+}
+
+function compareHourReportRows(a: HourReportList, b: HourReportList, key: SortKey, dir: 'asc' | 'desc'): number {
+  const av = hourReportSortValue(a, key);
+  const bv = hourReportSortValue(b, key);
+  if (typeof av === 'number' && typeof bv === 'number')
+    return dir === 'asc' ? av - bv : bv - av;
+  const cmp = String(av).localeCompare(String(bv), 'he', { sensitivity: 'base' });
+  return dir === 'asc' ? cmp : -cmp;
+}
+
+// ─── Sort helpers — OUTSIDE component ────────────────────────────────────────
+
+function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
+  if (!active || !dir) return <ChevronsUpDown size={11} className="text-gray-400" />;
+  return dir === 'asc' ? <ChevronUp size={11} className="text-teal-600" /> : <ChevronDown size={11} className="text-teal-600" />;
+}
+
+function SortableTh({ sortKey, label, className, sort, onSort }: {
+  sortKey: SortKey; label: string; className: string; sort: SortState; onSort: (k: SortKey) => void;
+}) {
+  return (
+    <th className={`${className} cursor-pointer select-none hover:bg-gray-100 transition-colors`} onClick={() => onSort(sortKey)}>
+      <div className="flex items-center gap-1">
+        <span>{label}</span>
+        <SortIcon active={sort.key === sortKey} dir={sort.key === sortKey ? sort.dir : null} />
+      </div>
+    </th>
+  );
+}
+
+// ─── Avatar colors ────────────────────────────────────────────────────────────
 
 const AVATAR_COLORS = [
   'from-violet-400 to-purple-500', 'from-sky-400 to-blue-500',
-  'from-rose-400 to-pink-500',     'from-amber-400 to-orange-500',
+  'from-rose-400 to-pink-500', 'from-amber-400 to-orange-500',
   'from-emerald-400 to-teal-500',
 ];
 const avatarColor = (name: string) => AVATAR_COLORS[name.charCodeAt(0) % AVATAR_COLORS.length];
 
-// ── colSpan helper ────────────────────────────────────────────────────────────
-// function colCount(hideDate: boolean, hideProject: boolean, hideEmployee: boolean) {
-//   return 5 - (hideDate ? 1 : 0) - (hideProject ? 1 : 0) - (hideEmployee ? 1 : 0);
-// }
+const HOURS_REPORT_COLUMNS: ReportColumn[] = [
+  { key: 'date', label: 'תאריך', widthPx: 120, widthChars: 16, align: 'right' },
+  { key: 'taskName', label: 'משימה', widthPx: 280, widthChars: 42, align: 'right' },
+  { key: 'stepName', label: 'שלב', widthPx: 180, widthChars: 26, align: 'right' },
+  { key: 'subjectName', label: 'נושא תכנון', widthPx: 180, widthChars: 26, align: 'right' },
+  { key: 'projectName', label: 'פרויקט', widthPx: 200, widthChars: 28, align: 'right' },
+  { key: 'employeeName', label: 'עובד מדווח', widthPx: 160, widthChars: 22, align: 'right' },
+  { key: 'startTime', label: 'משעה', widthPx: 90, widthChars: 12, align: 'center' },
+  { key: 'endTime', label: 'עד שעה', widthPx: 90, widthChars: 12, align: 'center' },
+  { key: 'hours', label: 'סה"כ שעות', widthPx: 110, widthChars: 12, align: 'center' },
+  { key: 'description', label: 'הערות', widthPx: 320, widthChars: 48, align: 'right' }
+];
 
-// ── Data row (conditionally hides columns) ────────────────────────────────────
-function DataRow({ r, onDelete, hideDate, hideProject, hideEmployee }: {
-  r: HoursReportEntry; onDelete: (id: number) => void;
+// ── Data row ──────────────────────────────────────────────────────────────────
+
+function DataRow({ r, onDelete, onEdit, hideDate, hideProject, hideEmployee }: {
+  r: HourReportList; onDelete: (id: number) => void; onEdit: (r: HourReportList) => void;
   hideDate?: boolean; hideProject?: boolean; hideEmployee?: boolean;
 }) {
+  const [hovered, setHovered] = useState(false);
   return (
-    <tr className="hover:bg-teal-50 transition-colors border-b border-gray-100">
+    <tr className="hover:bg-teal-50 transition-colors border-b border-gray-100 relative group"
+      onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
       {!hideDate && (
         <td className="px-4 py-2.5">
-          <span className="text-xs font-semibold text-gray-700">{formatDateHe(r.reportDate)}</span>
+          <span className="text-xs font-semibold text-gray-700">{formatDateHe(r.dateTime)}</span>
         </td>
       )}
+       <td className="px-3 py-2 max-w-[200px]">
+                              <span
+                                className="text-xs font-medium text-gray-900 px-1 rounded block overflow-hidden"
+                                style={{
+                                  display: '-webkit-box',
+                                  WebkitLineClamp: 2,
+                                  WebkitBoxOrient: 'vertical',
+                                  overflow: 'hidden',
+                                }}
+                              >
+                                {r.taskName}
+                              </span>
+                            </td>
+
+      {/* <td className="px-4 py-2.5">
+        <div className="text-xs font-semibold text-gray-800 leading-snug">{r.taskName}</div>
+      </td> */}
       <td className="px-4 py-2.5">
-        <div className="text-xs font-semibold text-gray-800">{r.taskName}</div>
-        <div className="text-[10px] text-gray-400 mt-0.5">{r.stage}</div>
+        <div className="text-xs font-medium text-gray-700 leading-snug">{r.stepName}</div>
+      </td>
+      <td className="px-4 py-2.5">
+        <div className="text-xs font-medium text-gray-700 leading-snug">{r.subjectName}</div>
       </td>
       {!hideProject && (
         <td className="px-4 py-2.5">
-          <span className="inline-flex px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">{r.project}</span>
+          <span className="inline-flex px-2 py-0.5  rounded-full text-xs font-medium">{r.projectName}</span>
         </td>
       )}
       {!hideEmployee && (
         <td className="px-4 py-2.5">
           <div className="flex items-center gap-2">
-            <div className={`w-6 h-6 rounded-full bg-gradient-to-br ${avatarColor(r.reporterName)} flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0`}>
-              {getInitials(r.reporterName)}
+            <div className={`w-6 h-6 rounded-full bg-gradient-to-br ${avatarColor(r.employeeName)} flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0`}>
+              {getInitials(r.employeeName)}
             </div>
-            <span className="text-xs font-medium text-gray-700">{r.reporterName}</span>
+            <span className="text-xs font-medium text-gray-700">{r.employeeName}</span>
           </div>
         </td>
       )}
       <td className="px-4 py-2.5 text-center">
-        {r.inputMode === 'range' && r.fromTime
-          ? <span className="text-xs font-medium text-gray-700 bg-gray-100 px-2 py-1 rounded-lg">{r.fromTime} – {r.toTime}</span>
-          : <span className="text-xs text-gray-400">—</span>
-        }
+        {r.startTime
+          ? <span className="text-xs font-medium text-gray-700 bg-gray-100 px-2 py-1 rounded-lg">{r.startTime}</span>
+          : <span className="text-xs text-gray-400">—</span>}
+      </td>
+      <td className="px-4 py-2.5 text-center">
+        {r.endTime
+          ? <span className="text-xs font-medium text-gray-700 bg-gray-100 px-2 py-1 rounded-lg">{r.endTime}</span>
+          : <span className="text-xs text-gray-400">—</span>}
       </td>
       <td className="px-4 py-2.5 text-center">
         <span className="inline-flex items-center px-2.5 py-0.5 bg-teal-100 text-teal-700 rounded-full text-xs font-bold">
-          {formatHours(r.totalHours)}
+          {formatHours(r.hours)}
         </span>
       </td>
       <td className="px-4 py-2.5">
-        {r.notes
-          ? <span className="text-xs text-gray-500 italic">{r.notes}</span>
-          : <span className="text-xs text-gray-300">—</span>
-        }
+        {r.description
+          ? <span className="text-xs text-gray-500 italic">{r.description}</span>
+          : <span className="text-xs text-gray-300">—</span>}
       </td>
       <td className="px-4 py-2.5 text-center">
-        <button onClick={() => onDelete(r.id)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all" title="מחק דיווח">
-          <Trash2 size={13} />
-        </button>
-      </td>
-    </tr>
-  );
-}
-
-// ── Table headers (conditional) ───────────────────────────────────────────────
-function TableHead({ hideDate, hideProject, hideEmployee }: {
-  hideDate?: boolean; hideProject?: boolean; hideEmployee?: boolean;
-}) {
-  return (
-    <thead>
-      <tr className="bg-gray-50 border-b border-gray-200">
-        {!hideDate     && <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 w-28">תאריך</th>}
-        <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500">שלב / משימה</th>
-        {!hideProject  && <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 w-32">פרויקט</th>}
-        {!hideEmployee && <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 w-36">עובד מדווח</th>}
-        <th className="px-4 py-2.5 text-center text-xs font-semibold text-gray-500 w-36">משעה – עד שעה</th>
-        <th className="px-4 py-2.5 text-center text-xs font-semibold text-gray-500 w-24">סה"כ שעות</th>
-        <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500">הערות</th>
-        <th className="px-4 py-2.5 w-10"></th>
-      </tr>
-    </thead>
-  );
-}
-
-// ── Group header row (spans all visible columns) ──────────────────────────────
-function GroupRow({ label, sub, totalHours, count, color, expanded, onToggle, totalCols, avatar }: {
-  label: string; sub?: string; totalHours: number; count: number;
-  color: string; expanded: boolean; onToggle: () => void;
-  totalCols: number; avatar?: React.ReactNode;
-}) {
-  return (
-    <tr onClick={onToggle} className={`${color} cursor-pointer select-none`}>
-      <td colSpan={totalCols} className="px-5 py-2.5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            {expanded
-              ? <ChevronDown size={14} className="text-white opacity-80" />
-              : <ChevronUp   size={14} className="text-white opacity-80" />
-            }
-            {avatar}
-            <span className="font-bold text-white text-sm">{label}</span>
-            {sub && <span className="text-white opacity-60 text-xs">{sub}</span>}
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="text-white opacity-75 text-xs">{count} דיווחים</span>
-            <span className="bg-white bg-opacity-20 text-white text-xs font-bold px-2.5 py-0.5 rounded-full">
-              {formatHours(totalHours)}
-            </span>
-          </div>
+        <div className="flex items-center justify-center gap-1">
+          <button onClick={() => onEdit(r)}
+            className={`p-1.5 text-white bg-emerald-500 hover:bg-emerald-600 rounded-lg transition-all ${hovered ? 'opacity-100' : 'opacity-0'}`}
+            title="ערוך דיווח">
+            <Edit2 size={13} />
+          </button>
+          <button onClick={() => onDelete(r.hoursReportID)}
+            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+            title="מחק דיווח">
+            <Trash2 size={13} />
+          </button>
         </div>
       </td>
     </tr>
@@ -135,13 +196,15 @@ function GroupRow({ label, sub, totalHours, count, color, expanded, onToggle, to
 }
 
 // ── View Modal ────────────────────────────────────────────────────────────────
+
 function HoursViewModal({ viewMode, onSelect, onClose }: {
   viewMode: ViewMode; onSelect: (v: ViewMode) => void; onClose: () => void;
 }) {
-  const options: { value: ViewMode; label: string; icon: React.ElementType }[] = [
-    { value: 'date',     label: 'קבץ לפי תאריך',  icon: Calendar  },
-    { value: 'employee', label: 'קבץ לפי עובד',    icon: User      },
-    { value: 'project',  label: 'קבץ לפי פרויקט', icon: Briefcase },
+  const options: { value: ViewMode; label: string; desc: string; icon: React.ElementType }[] = [
+    { value: 'all',      label: 'הצג הכל',        desc: 'כל הדיווחים ברשימה שטוחה ללא קיבוץ', icon: List },
+    { value: 'date',     label: 'קבץ לפי תאריך',  desc: 'קבץ את הדיווחים לפי תאריך',          icon: Calendar },
+    { value: 'employee', label: 'קבץ לפי עובד',   desc: 'קבץ את הדיווחים לפי שם העובד',       icon: User },
+    { value: 'project',  label: 'קבץ לפי פרויקט', desc: 'קבץ את הדיווחים לפי שם הפרויקט',    icon: Briefcase },
   ];
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -154,15 +217,12 @@ function HoursViewModal({ viewMode, onSelect, onClose }: {
         </div>
         <div className="p-6 space-y-2">
           {options.map(opt => (
-            <button
-              key={opt.value}
-              onClick={() => { onSelect(opt.value); onClose(); }}
+            <button key={opt.value} onClick={() => { onSelect(opt.value); onClose(); }}
               className={`w-full text-right px-4 py-3 rounded-lg font-medium transition-colors flex items-center gap-3 ${
                 viewMode === opt.value
                   ? 'bg-teal-50 text-teal-700 border-2 border-teal-200'
                   : 'hover:bg-gray-50 border-2 border-transparent text-gray-700'
-              }`}
-            >
+              }`}>
               <opt.icon size={18} className={viewMode === opt.value ? 'text-teal-500' : 'text-gray-400'} />
               {opt.label}
             </button>
@@ -173,35 +233,263 @@ function HoursViewModal({ viewMode, onSelect, onClose }: {
   );
 }
 
+// ── New Report Modal ──────────────────────────────────────────────────────────
+
+function NewReportSelectorModal({ onSelect, onClose }: {
+  onSelect: (task: TaskReview) => void; onClose: () => void;
+}) {
+  const [projects, setProjects] = useState<HourReportProject[]>([]);
+  const [steps, setSteps] = useState<HourReportStep[]>([]);
+  const [projectsError, setProjectsError] = useState('');
+  const [stepsError, setStepsError] = useState('');
+  const [selectedProject, setSelectedProject] = useState<HourReportProject | null>(null);
+  const [selectedStep, setSelectedStep] = useState<HourReportStep | null>(null);
+
+  useEffect(() => {
+    const loadProjects = async () => {
+      setProjectsError('');
+      try {
+        const user = authService.getCurrentUser();
+        if (!user) { setProjects([]); setProjectsError('לא נמצא משתמש מחובר'); return; }
+        const data = await getHourReportProjects(null, null);
+        setProjects(data);
+      } catch (error) {
+        setProjects([]);
+        setProjectsError(error instanceof Error ? error.message : 'שגיאה בטעינת פרויקטים');
+      }
+    };
+    void loadProjects();
+  }, []);
+
+  useEffect(() => {
+    const loadSteps = async () => {
+      setStepsError('');
+      if (!selectedProject) { setSteps([]); return; }
+      const item = projects.find(p => p.id === selectedProject?.id);
+      if (!item) { setSteps([]); return; }
+      try {
+        const data = await getHourReportStepsByProjectId(item.id, null);
+        setSteps(data);
+      } catch (error) {
+        setSteps([]);
+        setStepsError(error instanceof Error ? error.message : 'שגיאה בטעינת שלבים');
+      }
+    };
+    void loadSteps();
+  }, [selectedProject, projects]);
+
+  const handleConfirm = () => {
+    if (!selectedProject || !selectedStep) return;
+    const fakeTask: TaskReview = {
+      id: selectedStep?.id ?? 0, name: selectedStep?.name ?? '', stage: selectedStep?.name ?? '',
+      planningStepID: 0, planningSubjectName: '', percentage: 0,
+      workHours: 0, workDays: 0, duration: 0, isActive: true,
+      dependsOnStepID: false, dependsOnTaskID: false, startDate: '', endDate: '',
+      senderID: 0, receivers: [], senderName: '', statuID: 0, statusName: '',
+      urgencyID: 0, urgencyName: '', note: null,
+      creatDate: new Date().toISOString(), lastUpdate: new Date().toISOString(),
+      updateBy: 0, isClosed: false, orderNum: 0, hourReport: 0,
+      projectName: selectedProject?.name ?? '', projectId: selectedProject?.id ?? 0,
+      utilizationPercentage: 0, hasChat: false,
+      isPlanningSte: selectedStep?.isPlanningStep ?? true,
+      projectType: '', studioDepartment: '',
+    } as unknown as TaskReview;
+    onSelect(fakeTask);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+        <div className="border-b px-6 py-4 flex items-center justify-between bg-gradient-to-r from-emerald-500 to-teal-600 rounded-t-2xl">
+          <div className="flex items-center gap-2">
+            <Clock size={20} className="text-white" />
+            <h2 className="text-lg font-bold text-white">דיווח שעות חדש</h2>
+          </div>
+          <button onClick={onClose} className="p-1.5 hover:bg-white hover:bg-opacity-20 rounded-lg transition-all">
+            <X size={18} className="text-white" />
+          </button>
+        </div>
+        <div className="p-6 space-y-4">
+          {projectsError && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{projectsError}</div>}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1.5">פרויקט</label>
+            <AutoComplete items={projects} selectedItem={projects.find(p => p.id === selectedProject?.id) ?? null}
+              onSelect={item => { setSelectedProject(item); setSelectedStep(null); }}
+              getItemId={item => item.id} getItemLabel={item => item.name} placeholder="בחר פרויקט..." />
+          </div>
+          {stepsError && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{stepsError}</div>}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1.5">שלב / משימה</label>
+            <AutoComplete items={steps} selectedItem={steps.find(s => s.id === selectedStep?.id) ?? null}
+              onSelect={item => setSelectedStep(item)}
+              getItemId={item => item.id} getItemLabel={item => item.name}
+              placeholder="בחר שלב..." disabled={!selectedProject} />
+          </div>
+        </div>
+        <div className="border-t px-6 py-4 flex gap-3">
+          <button onClick={onClose} className="flex-1 py-2.5 border-2 border-gray-300 rounded-lg text-sm font-semibold hover:bg-gray-50">ביטול</button>
+          <button onClick={handleConfirm} disabled={!selectedProject || !selectedStep}
+            className="flex-1 bg-emerald-500 text-white py-2.5 rounded-lg text-sm font-bold hover:bg-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed">
+            המשך
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Component ────────────────────────────────────────────────────────────
+
 export default function HoursReportList() {
-  const [reports, setReports]     = useState<HoursReportEntry[]>(DEMO_REPORTS);
-  const [viewMode, setViewMode]   = useState<ViewMode>('date');
+  const [reports, setReports] = useState<HourReportList[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [viewMode, setViewMode] = useState<ViewMode>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [filters, setFilters]     = useState<HoursReportFilters>(EMPTY_FILTERS);
-  const [showViewModal, setShowViewModal]     = useState(false);
+  const [hoursDbFilters, setHoursDbFilters] = usePersistedHoursDbFilters('taskit.hoursReport.dbFilters', getDefaultHoursDBFilters);
+  const [showViewModal, setShowViewModal] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [openColumnFilter, setOpenColumnFilter] = useState<HoursColumnFilterKey | null>(null);
+  const [columnFilterSearch, setColumnFilterSearch] = useState({ dateTime: '', projectName: '', employeeName: '' });
+  const [columnFilters, setColumnFilters] = useState({ dateTimes: [] as string[], projectNames: [] as string[], employeeNames: [] as string[] });
+  const [editHourReport, setEditHourReport] = useState<HoursReport | null>(null);
+  const [editTask, setEditTask] = useState<TaskReview | null>(null);
+  const [showNewSelector, setShowNewSelector] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
 
-  const allProjects  = useMemo(() => [...new Set(reports.map(r => r.project))].sort(),      [reports]);
-  const allReporters = useMemo(() => [...new Set(reports.map(r => r.reporterName))].sort(), [reports]);
+  const [sort, setSort] = useState<SortState>({ key: null, dir: null });
 
-  const filtered = useMemo(() => reports.filter(r => {
+  const handleSort = (key: SortKey) => {
+    setSort(prev => {
+      if (prev.key !== key) return { key, dir: 'asc' };
+      if (prev.dir === 'asc') return { key, dir: 'desc' };
+      return { key: null, dir: null };
+    });
+  };
+
+  useEffect(() => { void loadReports(); }, [hoursDbFilters.dateFrom, hoursDbFilters.dateTo]);
+
+  const toggleArrayFilter = <T,>(items: T[], value: T) =>
+    items.includes(value) ? items.filter(i => i !== value) : [...items, value];
+
+  const projectFilterOptions = useMemo(() =>
+    [...new Set(reports.map(r => r.projectName).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, 'he'))
+      .map(name => ({ value: name, label: name })), [reports]);
+
+  const employeeFilterOptions = useMemo(() =>
+    [...new Set(reports.map(r => r.employeeName).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, 'he'))
+      .map(name => ({ value: name, label: name })), [reports]);
+
+  const dateTimeFilterOptions = useMemo(() =>
+    [...new Set(reports.map(r => r.dateTime.split('T')[0]))]
+      .sort((a, b) => b.localeCompare(a))
+      .map(value => ({ value, label: formatDateHe(value) })), [reports]);
+
+  const columnFilterCount = columnFilters.dateTimes.length + columnFilters.projectNames.length + columnFilters.employeeNames.length;
+
+  const isColumnFilterActive = (key: HoursColumnFilterKey) => {
+    switch (key) {
+      case 'dateTime':     return columnFilters.dateTimes.length > 0;
+      case 'projectName':  return columnFilters.projectNames.length > 0;
+      case 'employeeName': return columnFilters.employeeNames.length > 0;
+      default: return false;
+    }
+  };
+
+  const loadReports = async (dbRange?: { dateFrom: string; dateTo: string; projects: number[] }) => {
+    setIsLoading(true);
+    setLoadError('');
+    const range = dbRange ?? hoursDbFilters;
+    try {
+      const user = authService.getCurrentUser();
+      if (!user) { setReports([]); setLoadError('לא נמצא משתמש מחובר'); return; }
+      const serverReports = await getHourReports({
+        Database: user.dataBase, EmployeeID: user.id, PermissionType: user.permissionId,
+        FromDate: range.dateFrom || null, ToDate: range.dateTo || null, projects: range.projects,
+      });
+      setReports(serverReports);
+    } catch (error) {
+      setReports([]);
+      setLoadError(error instanceof Error ? error.message : 'שגיאה בטעינת דיווחי שעות');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const baseFiltered = useMemo(() => reports.filter(r => {
     const q = searchQuery.toLowerCase();
-    const matchSearch = !q || [r.taskName, r.project, r.reporterName, r.stage, r.notes || '']
-      .some(v => v.toLowerCase().includes(q));
-    const matchProject  = filters.projects.length === 0  || filters.projects.includes(r.project);
-    const matchReporter = filters.reporters.length === 0 || filters.reporters.includes(r.reporterName);
-    const matchDateFrom = !filters.dateFrom || r.reportDate >= filters.dateFrom;
-    const matchDateTo   = !filters.dateTo   || r.reportDate <= filters.dateTo;
-    return matchSearch && matchProject && matchReporter && matchDateFrom && matchDateTo;
-  }), [reports, searchQuery, filters]);
+    const matchSearch = !q || [
+      r.taskName, r.stepName, r.subjectName,
+      r.projectName, r.employeeName, r.description || '',
+    ].filter((v): v is string => Boolean(v && String(v).trim())).some(v => v.toLowerCase().includes(q));
+    const matchDbProjects = hoursDbFilters.projects.length === 0 || hoursDbFilters.projects.includes(r.projectID);
+    const matchDbEmployees = hoursDbFilters.employees.length === 0 || hoursDbFilters.employees.includes(r.employeeName);
+    return matchSearch && matchDbProjects && matchDbEmployees;
+  }), [reports, searchQuery, hoursDbFilters.projects, hoursDbFilters.employees]);
 
-  const totalHours    = useMemo(() => filtered.reduce((s, r) => s + r.totalHours, 0), [filtered]);
-  const activeFilters = useMemo(() => countActiveFilters(filters), [filters]);
+  const filtered = useMemo(() => baseFiltered.filter(r => {
+    const reportDate = r.dateTime.split('T')[0];
+    return (
+      (columnFilters.dateTimes.length === 0 || columnFilters.dateTimes.includes(reportDate)) &&
+      (columnFilters.projectNames.length === 0 || columnFilters.projectNames.includes(r.projectName)) &&
+      (columnFilters.employeeNames.length === 0 || columnFilters.employeeNames.includes(r.employeeName))
+    );
+  }), [baseFiltered, columnFilters]);
 
-  const handleDelete = (id: number) => setReports(prev => prev.filter(r => r.id !== id));
-  const toggleGroup  = (key: string) => setCollapsed(prev => {
+  const sortedFiltered = useMemo(() => {
+    if (!sort.key || !sort.dir) return filtered;
+    const sk = sort.key;
+    const sd = sort.dir;
+    return [...filtered].sort((a, b) => compareHourReportRows(a, b, sk, sd));
+  }, [filtered, sort]);
+
+  const getReportRows = (): ReportRow[] =>
+    sortedFiltered.map((r) => ({
+      date: formatDateHe(r.dateTime),
+      taskName: r.taskName ?? '',
+      stepName: r.stepName ?? '',
+      subjectName: r.subjectName ?? '',
+      projectName: r.projectName ?? '',
+      employeeName: r.employeeName ?? '',
+      startTime: r.startTime ?? '—',
+      endTime: r.endTime ?? '—',
+      hours: formatHours(r.hours),
+      description: r.description ?? ''
+    }));
+
+  const totalHours = useMemo(() => filtered.reduce((s, r) => s + r.hours, 0), [filtered]);
+  const activeFilters = useMemo(() => countActiveHoursDbFilters(hoursDbFilters) + columnFilterCount, [hoursDbFilters, columnFilterCount]);
+
+  const handleDelete = async (id: number) => {
+    await deleteHourReport(id);
+    setReports(prev => prev.filter(r => r.hoursReportID !== id));
+  };
+
+  const handleEdit = (r: HourReportList) => {
+    const report: HoursReport = {
+      id: r.hoursReportID, taskId: r.objectID, reportDate: r.dateTime,
+      fromTime: r.startTime, toTime: r.endTime, totalHours: r.hours,
+      inputMode: r.startTime && r.endTime ? 'range' : 'total',
+      notes: r.description ?? undefined,
+    };
+    setEditHourReport(report);
+    const task: TaskReview = {
+      id: r.objectID,
+      name: r.taskName ,
+      subject: r.stepName ?? '',
+      planningSubjectName: r.subjectName ?? '',
+      projectName: r.projectName, projectId: r.projectID,
+      isPlanningSte: r.isPlanningStep,
+    } as unknown as TaskReview;
+    setEditTask(task);
+  };
+
+  const handleSaveReport = () => { loadReports(); setEditTask(null); };
+
+  const toggleGroup = (key: string) => setCollapsed(prev => {
     const next = new Set(prev);
     next.has(key) ? next.delete(key) : next.add(key);
     return next;
@@ -211,50 +499,221 @@ export default function HoursReportList() {
   const byEmployee = useMemo(() => groupByEmployee(filtered), [filtered]);
   const byProject  = useMemo(() => groupByProject(filtered),  [filtered]);
 
-  // columns visible per view
   const hideDate     = viewMode === 'date';
   const hideProject  = viewMode === 'project';
-  const hideEmployee = viewMode === 'employee';
-  // total visible columns = fixed 5 (משימה, שעות, טווח, הערות, מחק) + dynamic
-  const totalCols = 5 + (hideDate ? 0 : 1) + (hideProject ? 0 : 1) + (hideEmployee ? 0 : 1);
+  const hideEmployee = viewMode === 'employee' || authService.getPermissionId() === 4;
+  const totalCols =
+    8 +
+    (hideDate ? 0 : 1) +
+    (hideProject ? 0 : 1) +
+    (hideEmployee ? 0 : 1);
+
+  const sortGroup = (items: HourReportList[]) => {
+    if (!sort.key || !sort.dir) return items;
+    const sk = sort.key;
+    const sd = sort.dir;
+    return [...items].sort((a, b) => compareHourReportRows(a, b, sk, sd));
+  };
+
+  // ─── Shared thead ─────────────────────────────────────────────────────────
+  const renderThead = () => (
+    <thead>
+      <tr className="bg-gray-50 border-b border-gray-200">
+        {!hideDate && (
+          <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 w-28 relative">
+            <div className="flex items-center justify-between gap-1">
+              <div
+                className="flex items-center gap-1 cursor-pointer select-none hover:text-teal-600"
+                onClick={() => handleSort('dateTime')}
+              >
+                <span>תאריך</span>
+                <SortIcon active={sort.key === 'dateTime'} dir={sort.key === 'dateTime' ? sort.dir : null} />
+              </div>
+              <button
+                type="button"
+                onClick={() => setOpenColumnFilter(c => c === 'dateTime' ? null : 'dateTime')}
+                className={`p-1 rounded-md border transition-colors shrink-0 ${
+                  isColumnFilterActive('dateTime')
+                    ? 'bg-emerald-100 text-emerald-700 border-emerald-300'
+                    : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-100'
+                }`}
+                title="סינון תאריך"
+              >
+                <Filter size={12} />
+              </button>
+            </div>
+            {openColumnFilter === 'dateTime' && (
+              <div className="absolute mt-2 z-50 right-0 w-72 rounded-xl border border-gray-200 bg-white shadow-xl p-3">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-sm font-semibold text-gray-800">סינון תאריך</span>
+                  <button type="button" onClick={() => setOpenColumnFilter(null)} className="p-1 rounded-md text-gray-500 hover:bg-gray-100">
+                    <X size={14} />
+                  </button>
+                </div>
+                <SearchableCheckboxFilter
+                  searchValue={columnFilterSearch.dateTime}
+                  onSearchChange={v => setColumnFilterSearch(p => ({ ...p, dateTime: v }))}
+                  options={dateTimeFilterOptions} selectedValues={columnFilters.dateTimes}
+                  onToggle={v => setColumnFilters(p => ({ ...p, dateTimes: toggleArrayFilter(p.dateTimes, v) }))}
+                  onClear={() => setColumnFilters(p => ({ ...p, dateTimes: [] }))}
+                  searchPlaceholder="חיפוש תאריך..." emptyMessage="לא נמצאו תאריכים"
+                />
+              </div>
+            )}
+          </th>
+        )}
+
+        <SortableTh sortKey="taskName" label="משימה"
+          className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 min-w-[7rem]"
+          sort={sort} onSort={handleSort} />
+        <SortableTh sortKey="stepName" label="שלב"
+          className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 min-w-[7rem]"
+          sort={sort} onSort={handleSort} />
+        <SortableTh sortKey="subjectName" label="נושא תכנון"
+          className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 min-w-[8rem]"
+          sort={sort} onSort={handleSort} />
+
+        {!hideProject && (
+          <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 w-46 relative">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1 cursor-pointer select-none hover:text-teal-600"
+                onClick={() => handleSort('projectName')}>
+                <span>פרויקט</span>
+                <SortIcon active={sort.key === 'projectName'} dir={sort.key === 'projectName' ? sort.dir : null} />
+              </div>
+              <button type="button"
+                onClick={() => setOpenColumnFilter(c => c === 'projectName' ? null : 'projectName')}
+                className={`p-1 rounded-md border transition-colors ${isColumnFilterActive('projectName') ? 'bg-emerald-100 text-emerald-700 border-emerald-300' : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-100'}`}
+                title="סינון פרויקט">
+                <Filter size={12} />
+              </button>
+            </div>
+            {openColumnFilter === 'projectName' && (
+              <div className="absolute mt-2 z-50 right-0 w-72 rounded-xl border border-gray-200 bg-white shadow-xl p-3">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-sm font-semibold text-gray-800">סינון פרויקט</span>
+                  <button type="button" onClick={() => setOpenColumnFilter(null)} className="p-1 rounded-md text-gray-500 hover:bg-gray-100"><X size={14} /></button>
+                </div>
+                <SearchableCheckboxFilter
+                  searchValue={columnFilterSearch.projectName}
+                  onSearchChange={v => setColumnFilterSearch(p => ({ ...p, projectName: v }))}
+                  options={projectFilterOptions} selectedValues={columnFilters.projectNames}
+                  onToggle={v => setColumnFilters(p => ({ ...p, projectNames: toggleArrayFilter(p.projectNames, v) }))}
+                  onClear={() => setColumnFilters(p => ({ ...p, projectNames: [] }))}
+                  searchPlaceholder="חיפוש פרויקט..." emptyMessage="לא נמצאו פרויקטים"
+                />
+              </div>
+            )}
+          </th>
+        )}
+
+        {!hideEmployee && (
+          <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 w-36 relative">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1 cursor-pointer select-none hover:text-teal-600"
+                onClick={() => handleSort('employeeName')}>
+                <span>עובד מדווח</span>
+                <SortIcon active={sort.key === 'employeeName'} dir={sort.key === 'employeeName' ? sort.dir : null} />
+              </div>
+              <button type="button"
+                onClick={() => setOpenColumnFilter(c => c === 'employeeName' ? null : 'employeeName')}
+                className={`p-1 rounded-md border transition-colors ${isColumnFilterActive('employeeName') ? 'bg-emerald-100 text-emerald-700 border-emerald-300' : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-100'}`}
+                title="סינון עובד">
+                <Filter size={12} />
+              </button>
+            </div>
+            {openColumnFilter === 'employeeName' && (
+              <div className="absolute mt-2 z-50 right-0 w-72 rounded-xl border border-gray-200 bg-white shadow-xl p-3">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-sm font-semibold text-gray-800">סינון עובד מדווח</span>
+                  <button type="button" onClick={() => setOpenColumnFilter(null)} className="p-1 rounded-md text-gray-500 hover:bg-gray-100"><X size={14} /></button>
+                </div>
+                <SearchableCheckboxFilter
+                  searchValue={columnFilterSearch.employeeName}
+                  onSearchChange={v => setColumnFilterSearch(p => ({ ...p, employeeName: v }))}
+                  options={employeeFilterOptions} selectedValues={columnFilters.employeeNames}
+                  onToggle={v => setColumnFilters(p => ({ ...p, employeeNames: toggleArrayFilter(p.employeeNames, v) }))}
+                  onClear={() => setColumnFilters(p => ({ ...p, employeeNames: [] }))}
+                  searchPlaceholder="חיפוש עובד..." emptyMessage="לא נמצאו עובדים"
+                />
+              </div>
+            )}
+          </th>
+        )}
+
+        <th className="px-4 py-2.5 text-center text-xs font-semibold text-gray-500 w-20">משעה</th>
+        <th className="px-4 py-2.5 text-center text-xs font-semibold text-gray-500 w-20">עד שעה</th>
+        <SortableTh sortKey="hours" label='סה"כ שעות'
+          className="px-4 py-2.5 text-center text-xs font-semibold text-gray-500 w-24"
+          sort={sort} onSort={handleSort} />
+        <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 w-32">הערות</th>
+        <th className="px-4 py-2.5 w-20"></th>
+      </tr>
+    </thead>
+  );
+
+  // ─── Group card wrapper ───────────────────────────────────────────────────
+  const renderGroupCard = (
+    groupKey: string,
+    headerContent: React.ReactNode,
+    headerClass: string,
+    rows: HourReportList[]
+  ) => (
+    <div key={groupKey} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+      <div
+        className={`px-6 py-3 flex items-center justify-between cursor-pointer ${headerClass}`}
+        onClick={() => toggleGroup(groupKey)}
+      >
+        <div className="flex items-center gap-2">
+          {!collapsed.has(groupKey)
+            ? <ChevronDown size={16} className="text-white opacity-80" />
+            : <ChevronUp size={16} className="text-white opacity-80" />}
+          {headerContent}
+        </div>
+        <span className="text-white text-sm opacity-80">({rows.length} דיווחים)</span>
+      </div>
+      {!collapsed.has(groupKey) && (
+        <div className="overflow-x-auto">
+          <table className="w-full table-fixed min-w-[1180px]">
+            {renderThead()}
+            <tbody className="divide-y divide-gray-100">
+              {sortGroup(rows).map(r => (
+                <DataRow key={r.hoursReportID} r={r} onDelete={handleDelete} onEdit={handleEdit}
+                  hideDate={hideDate} hideProject={hideProject} hideEmployee={hideEmployee} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
 
   return (
-    <div className="p-6 space-y-5" dir="rtl">
-
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-teal-500 flex items-center justify-center shadow-sm">
-            <FileText size={20} className="text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">דיווחי שעות</h1>
-            <p className="text-sm text-gray-500">{filtered.length} דיווחים • סה"כ {formatHours(totalHours)}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="bg-teal-50 border border-teal-200 rounded-xl px-4 py-2 text-center min-w-[80px]">
-            <div className="text-xl font-bold text-teal-700">{formatHours(totalHours)}</div>
-            <div className="text-xs text-teal-500">סה"כ שעות</div>
-          </div>
-          <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2 text-center min-w-[70px]">
-            <div className="text-xl font-bold text-blue-700">{filtered.length}</div>
-            <div className="text-xs text-blue-500">דיווחים</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Controls Bar */}
-      <HoursReportControls
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
+    <div className=" space-y-5" dir="rtl">
+      <HoursReportHeader
+        searchQuery={searchQuery} onSearchChange={setSearchQuery}
         activeFiltersCount={activeFilters}
         onShowViewModal={() => setShowViewModal(true)}
         onShowFilterModal={() => setShowFilterModal(true)}
+        onShowReportModal={() => setShowReportModal(true)}
+        onRefresh={() => { void loadReports(); }}
+        onShowNewSelector={() => setShowNewSelector(true)}
+        totalHours={totalHours} filteredReportsCount={filtered.length} totalReportsCount={reports.length}
       />
+      
 
-      {/* Empty state */}
-      {filtered.length === 0 && (
+      {loadError && (
+        <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">{loadError}</div>
+      )}
+
+      {isLoading && (
+        <div className="bg-white rounded-xl border border-gray-200 py-16 text-center">
+          <Clock size={40} className="text-gray-300 mx-auto mb-3 animate-pulse" />
+          <div className="text-gray-500 font-medium">טוען דיווחי שעות...</div>
+        </div>
+      )}
+
+      {!isLoading && filtered.length === 0 && (
         <div className="bg-white rounded-xl border border-gray-200 py-16 text-center">
           <Clock size={40} className="text-gray-300 mx-auto mb-3" />
           <div className="text-gray-400 font-medium">לא נמצאו דיווחי שעות</div>
@@ -262,107 +721,138 @@ export default function HoursReportList() {
         </div>
       )}
 
-      {/* Table */}
-      {filtered.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[700px]">
-
-              <TableHead hideDate={hideDate} hideProject={hideProject} hideEmployee={hideEmployee} />
-
-              <tbody>
-
-                {/* ── לפי תאריך ── */}
-                {viewMode === 'date' && byDate.map(group => (
-                  <React.Fragment key={group.date}>
-                    <GroupRow
-                      label={formatDateHe(group.date)}
-                      sub={new Date(group.date).toLocaleDateString('he-IL', { weekday: 'long' })}
-                      totalHours={group.totalHours} count={group.reports.length}
-                      color="bg-gradient-to-l from-teal-600 to-teal-500"
-                      expanded={!collapsed.has(group.date)} onToggle={() => toggleGroup(group.date)}
-                      totalCols={totalCols}
-                    />
-                    {!collapsed.has(group.date) && group.reports.map(r => (
-                      <DataRow key={r.id} r={r} onDelete={handleDelete}
-                        hideDate={hideDate} hideProject={hideProject} hideEmployee={hideEmployee} />
+      {!isLoading && filtered.length > 0 && (
+        <>
+          {/* ── הצג הכל ── */}
+          {viewMode === 'all' && (
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full table-fixed min-w-[1180px]">
+                  {renderThead()}
+                  <tbody className="divide-y divide-gray-100">
+                    {sortedFiltered.map(r => (
+                      <DataRow key={r.hoursReportID} r={r} onDelete={handleDelete} onEdit={handleEdit} />
                     ))}
-                  </React.Fragment>
-                ))}
+                  </tbody>
+                  <tfoot className="bg-teal-50 border-t-2 border-teal-200">
+                    <tr>
+                      <td colSpan={totalCols - 3} className="px-4 py-2.5">
+                        <span className="text-sm font-bold text-teal-800">סה"כ: {filtered.length} דיווחים</span>
+                      </td>
+                      <td className="px-4 py-2.5 text-center">
+                        <span className="inline-flex items-center px-3 py-0.5 bg-teal-500 text-white rounded-full text-sm font-bold">
+                          {formatHours(totalHours)}
+                        </span>
+                      </td>
+                      <td colSpan={2}></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          )}
 
-                {/* ── לפי עובד ── */}
-                {viewMode === 'employee' && byEmployee.map(group => (
-                  <React.Fragment key={group.reporterName}>
-                    <GroupRow
-                      label={group.reporterName}
-                      totalHours={group.totalHours} count={group.reports.length}
-                      color="bg-gradient-to-l from-violet-600 to-violet-500"
-                      expanded={!collapsed.has(group.reporterName)} onToggle={() => toggleGroup(group.reporterName)}
-                      totalCols={totalCols}
-                      avatar={
-                        <div className={`w-7 h-7 rounded-full bg-gradient-to-br ${avatarColor(group.reporterName)} flex items-center justify-center text-white text-[10px] font-bold border-2 border-white border-opacity-30`}>
-                          {getInitials(group.reporterName)}
-                        </div>
-                      }
-                    />
-                    {!collapsed.has(group.reporterName) && group.reports.map(r => (
-                      <DataRow key={r.id} r={r} onDelete={handleDelete}
-                        hideDate={hideDate} hideProject={hideProject} hideEmployee={hideEmployee} />
-                    ))}
-                  </React.Fragment>
-                ))}
+          {/* ── קבץ לפי תאריך ── */}
+          {viewMode === 'date' && (
+            <div className="space-y-4">
+              {byDate.map(group => renderGroupCard(
+                group.date,
+                <>
+                  <span className="text-white font-bold text-lg">{formatDateHe(group.date)}</span>
+                  <span className="text-white opacity-60 text-sm">
+                    {new Date(group.date).toLocaleDateString('he-IL', { weekday: 'long' })}
+                  </span>
+                </>,
+                'bg-gradient-to-r from-teal-400 to-teal-500',
+                group.reports
+              ))}
+            </div>
+          )}
 
-                {/* ── לפי פרויקט ── */}
-                {viewMode === 'project' && byProject.map(group => (
-                  <React.Fragment key={group.project}>
-                    <GroupRow
-                      label={group.project}
-                      totalHours={group.totalHours} count={group.reports.length}
-                      color="bg-gradient-to-l from-blue-600 to-blue-500"
-                      expanded={!collapsed.has(group.project)} onToggle={() => toggleGroup(group.project)}
-                      totalCols={totalCols}
-                    />
-                    {!collapsed.has(group.project) && group.reports.map(r => (
-                      <DataRow key={r.id} r={r} onDelete={handleDelete}
-                        hideDate={hideDate} hideProject={hideProject} hideEmployee={hideEmployee} />
-                    ))}
-                  </React.Fragment>
-                ))}
+          {/* ── קבץ לפי עובד ── */}
+          {viewMode === 'employee' && (
+            <div className="space-y-4">
+              {byEmployee.map(group => renderGroupCard(
+                group.reporterName,
+                <>
+                  <div className={`w-7 h-7 rounded-full bg-gradient-to-br ${avatarColor(group.reporterName)} flex items-center justify-center text-white text-[10px] font-bold border-2 border-white border-opacity-30`}>
+                    {getInitials(group.reporterName)}
+                  </div>
+                  <span className="text-white font-bold text-lg">{group.reporterName}</span>
+                </>,
+                'bg-gradient-to-r from-violet-400 to-violet-500',
+                group.reports
+              ))}
+            </div>
+          )}
 
-              </tbody>
-
-              {/* Totals footer */}
-              <tfoot className="bg-teal-50 border-t-2 border-teal-200">
-                <tr>
-                  <td colSpan={totalCols - 2} className="px-4 py-2.5">
-                    <span className="text-sm font-bold text-teal-800">סה"כ: {filtered.length} דיווחים</span>
-                  </td>
-                  <td className="px-4 py-2.5 text-center">
-                    <span className="inline-flex items-center px-3 py-0.5 bg-teal-500 text-white rounded-full text-sm font-bold">
-                      {formatHours(totalHours)}
-                    </span>
-                  </td>
-                  <td colSpan={2}></td>
-                </tr>
-              </tfoot>
-
-            </table>
-          </div>
-        </div>
+          {/* ── קבץ לפי פרויקט ── */}
+          {viewMode === 'project' && (
+            <div className="space-y-4">
+              {byProject.map(group => renderGroupCard(
+                group.project,
+                <span className="text-white font-bold text-lg">{group.project}</span>,
+                'bg-gradient-to-r from-blue-400 to-blue-500',
+                group.reports
+              ))}
+            </div>
+          )}
+        </>
       )}
 
-      {/* Modals */}
-      {showViewModal && (
-        <HoursViewModal viewMode={viewMode} onSelect={setViewMode} onClose={() => setShowViewModal(false)} />
-      )}
+      {showViewModal && <HoursViewModal viewMode={viewMode} onSelect={setViewMode} onClose={() => setShowViewModal(false)} />}
+
       {showFilterModal && (
-        <HoursReportFilterModal
-          filters={filters} allProjects={allProjects} allReporters={allReporters}
-          onChange={setFilters} onClear={() => setFilters(EMPTY_FILTERS)}
+        <HoursReportDbFilter
           onClose={() => setShowFilterModal(false)}
+          onApply={next => { setHoursDbFilters(next); void loadReports({ dateFrom: next.dateFrom, dateTo: next.dateTo, projects: next.projects }); }}
+          currentFilters={hoursDbFilters}
         />
       )}
 
+      {showNewSelector && (
+        <NewReportSelectorModal
+          onSelect={task => { setEditHourReport(null); setEditTask(task); setShowNewSelector(false); }}
+          onClose={() => setShowNewSelector(false)}
+        />
+      )}
+      {showReportModal && (
+        <MyTasksReportModal
+          isOpen={showReportModal}
+          onClose={() => setShowReportModal(false)}
+          rows={getReportRows()}
+          columns={HOURS_REPORT_COLUMNS}
+          filteredCount={filtered.length}
+          reportTitle="דוח שעות - רשימת דיווחים"
+          fileBaseName={`hours-report-${new Date().toISOString().slice(0, 10)}`}
+        />
+      )}
+ <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 mt-4">
+            <div className="flex items-center gap-2 mb-3 border-b border-amber-200 pb-2">
+              <span className="text-amber-600 text-lg">💡</span>
+              <h3 className="text-sm font-semibold text-amber-800">הערות</h3>
+            </div>
+            <ul className="space-y-2">
+              <li className="flex items-start gap-2 text-sm text-amber-800">
+                <span className="text-amber-500 mt-0.5">•</span>
+                <span>רשימת דיווחי שעות יופיעו לפי ההרשאות</span>
+              </li>
+              <li className="flex items-start gap-2 text-sm text-amber-800">
+                <span className="text-amber-500 mt-0.5">•</span>
+                <span>אפשר לשנות תצוגה לרשימה, לקבץ לפי קטגוריה, עדיפות ועוד</span>
+              </li>
+            </ul>
+          </div>
+      {editTask && (
+        <HoursReportModal task={editTask} editReport={editHourReport}
+          onClose={() => { setEditTask(null); setEditHourReport(null); }}
+          onSave={handleSaveReport}
+          onDelete={handleDelete}
+        />
+      )}
     </div>
+    
+    
   );
+  
 }

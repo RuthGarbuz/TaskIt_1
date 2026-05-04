@@ -1,107 +1,104 @@
 import { useState, useEffect } from 'react';
+import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import AllTasks from './pages/tasks/AllTasks';
 import MyTasks from './pages/tasks/MyTasks';
+import BillTasks from './pages/tasks/BillTasks';
 import Settings from './pages/settings/Settings';
 import ProjectView from './pages/projects/ProjectView';
 import Login from './pages/login/Login';
 import authService from './services/authService';
 import { getBasicProjects } from './services/projectInfoService';
 import type { CurrentView } from './types/index';
-import type { Task } from './types/index';
-import { initialTasks } from './Data/tasks';
 import type { ProjectBasic } from './Data/projectInfoData';
-import WorkloadView from './components/WorkLoadView';
 import HoursReportList from './pages/hoursReport/HoursReportList';
 import type { TaskReview } from './Data/projectsData';
-import { getMyTasks, getTasks } from './services/taskService';
+import WorkloadView from './pages/workload/WorkloadView';
 
 interface SelectedProject {
   id: number;
   name: string;
 }
 
-function App() {
-  // Login state
+function AppLayout() {
+  const navigate = useNavigate();
+  const location = useLocation();
+
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [username, setUsername] = useState('');
-
-  // Navigation state
-  const [currentView, setCurrentView] = useState<CurrentView>('myTasks');
-  const [selectedProject, setSelectedProject] = useState<SelectedProject | null>(null);
+  const [user, setUser] = useState<any>(null);
   const [projects, setProjects] = useState<ProjectBasic[]>([]);
-
-  // Tasks state
   const [tasks, setTasks] = useState<TaskReview[]>();
 
-  // Login handler
-  const handleLogin = async (username: string) => {
-    setUsername(username);
-    setIsLoggedIn(true);
-  };
+  const [selectedProject, setSelectedProject] = useState<SelectedProject | null>(() => {
+    const stored = sessionStorage.getItem('selectedProject');
+    return stored ? JSON.parse(stored) : null;
+  });
 
-  // Logout handler
+  // map path → CurrentView for Header
+  const pathToView: Record<string, CurrentView> = {
+    '/my-tasks':     'myTasks',
+    '/all-tasks':    'allTasks',
+    '/bill-tasks':   'billTasks',
+    '/settings':     'settings',
+    '/hours-report': 'hoursReport',
+    '/workload':     'workload',
+  };
+  const currentView: CurrentView = location.pathname.startsWith('/project/')
+    ? 'projects'
+    : pathToView[location.pathname] ?? 'myTasks';
+
   const handleLogout = () => {
     authService.logout();
+    sessionStorage.removeItem('selectedProject');
     setIsLoggedIn(false);
     setUsername('');
-    setCurrentView('myTasks');
     setSelectedProject(null);
     setProjects([]);
+    navigate('/login');
   };
 
-  // Project selection handler
   const handleProjectSelect = (projectId: number, projectName: string) => {
-    setSelectedProject({ id: projectId, name: projectName });
-    setCurrentView('projects');
+    const project = { id: projectId, name: projectName };
+    setSelectedProject(project);
+    sessionStorage.setItem('selectedProject', JSON.stringify(project));
+    navigate(`/project/${projectId}`);
   };
 
   const handleFavoriteChange = (projectId: number, isDefault: boolean) => {
     setProjects(prev => {
       const updated = prev.map(p => (p.id === projectId ? { ...p, isDefault } : p));
-
       if (isDefault) {
         const target = updated.find(p => p.id === projectId);
         return target ? [target, ...updated.filter(p => p.id !== projectId)] : updated;
       }
-
       const target = updated.find(p => p.id === projectId);
       const defaults = updated.filter(p => p.isDefault && p.id !== projectId);
       const others = updated.filter(p => !p.isDefault && p.id !== projectId);
-
       return target ? [...defaults, target, ...others] : updated;
     });
   };
 
-  // Back from project handler
-  const handleBackFromProject = () => {
-    setSelectedProject(null);
-    setCurrentView('myTasks');
-  };
-
-  // View change handler
-  const handleViewChange = async(view: CurrentView) => {
-    setCurrentView(view);
-   
-      if (view === 'myTasks') {
-        const data = await getMyTasks(null,null);
-        setTasks(data);
-
-      }
-      if (view ==='allTasks') {
-        const data = await getTasks(selectedProject?.id??0,null,null);
-        setTasks(data);
-      }
-  
+  const handleViewChange = (view: CurrentView) => {
+    const viewToPath: Record<CurrentView, string> = {
+      myTasks:     '/my-tasks',
+      allTasks:    '/all-tasks',
+      billTasks:   '/bill-tasks',
+      settings:    '/settings',
+      hoursReport: '/hours-report',
+      workload:    '/workload',
+      projects:    '/',
+    };
     if (view !== 'projects') {
       setSelectedProject(null);
+      sessionStorage.removeItem('selectedProject');
     }
+    navigate(viewToPath[view] ?? '/my-tasks');
   };
 
-  // Task handlers
   const handleTaskUpdate = (updatedTask: TaskReview) => {
-    setTasks(tasks?.map(task => task.id === updatedTask.id ? updatedTask : task));
+    setTasks(prev => prev?.map(task => task.id === updatedTask.id ? updatedTask : task));
   };
 
   const handleTasksUpdate = (updatedTasks: TaskReview[]) => {
@@ -109,6 +106,16 @@ function App() {
   };
 
   useEffect(() => {
+    const loadUser = async () => {
+      try {
+        const userData = await authService.getCurrentUser();
+        setUser(userData);
+        setUsername(userData?.username ?? '');
+        setIsLoggedIn(true);
+      } catch {
+        navigate('/login');
+      }
+    };
     const loadProjects = async () => {
       try {
         const data = await getBasicProjects();
@@ -117,65 +124,111 @@ function App() {
         console.error('Failed to load projects:', error);
       }
     };
-
-    if (isLoggedIn) {
-      loadProjects();
-    }
-  }, [isLoggedIn]);
-
-  // Show login if not logged in
-  if (!isLoggedIn) {
-    return <Login onLogin={handleLogin} />;
-  }
+    loadUser();
+    loadProjects();
+  }, []);
 
   return (
     <div className="flex h-screen bg-gray-50" dir="rtl">
-      {/* Sidebar - always visible */}
-      <Sidebar 
-        currentView={currentView} 
-        onViewChange={async (view) => await handleViewChange(view)}
+      <Sidebar
+        currentView={currentView}
+        onViewChange={handleViewChange}
         onProjectSelect={handleProjectSelect}
         onLogout={handleLogout}
         projects={projects}
+        permissionId={user?.permissionId}
       />
-      
-      {/* Main content */}
+
       <div className="flex-1 flex flex-col overflow-hidden">
-        {selectedProject && currentView === 'projects' ? (
-          <ProjectView
-            projectId={selectedProject.id}
-            projectName={selectedProject.name}
-            onBack={handleBackFromProject}
-            isDefault={projects.find(p => p.id === selectedProject.id)?.isDefault ?? false}
-            onFavoriteChange={handleFavoriteChange}
+        <Routes>
+          {/* Project route */}
+          <Route
+            path="/project/:projectId"
+            element={
+              selectedProject ? (
+                <ProjectView
+                  projectId={selectedProject.id}
+                  projectName={selectedProject.name}
+                  onBack={() => {
+                    setSelectedProject(null);
+                    sessionStorage.removeItem('selectedProject');
+                    navigate('/my-tasks');
+                  }}
+                  isDefault={projects.find(p => p.id === selectedProject.id)?.isDefault ?? false}
+                  onFavoriteChange={handleFavoriteChange}
+                  permissionId={user?.permissionId}
+                />
+              ) : (
+                <Navigate to="/my-tasks" />
+              )
+            }
           />
-        ) : (
-          <>
-            <Header currentView={currentView} username={username} />
-            <main className="flex-1 overflow-auto">
-              {currentView === 'myTasks' && (
-                <MyTasks 
-                  tasks={tasks??[]}
-                  onTaskUpdate={handleTaskUpdate}
-                  onTasksUpdate={handleTasksUpdate}
-                />
-              )}
-              {currentView === 'allTasks' && (
-                <AllTasks 
-                  tasks={tasks??[]}
-                  onTaskUpdate={handleTaskUpdate}
-                  onTasksUpdate={handleTasksUpdate}
-                />
-              )}
-              {currentView === 'settings' && <Settings />}
-  {currentView === 'hoursReport' && <HoursReportList />}
-              {currentView === 'workload'    && <WorkloadView />}
-              
-            </main>
-          </>
-        )}
+
+          {/* All other routes */}
+          <Route
+            path="/*"
+            element={
+              <>
+                <Header currentView={currentView} username={username} />
+                <main className="flex-1 overflow-auto">
+                  <Routes>
+                    <Route index element={<Navigate to="/my-tasks" />} />
+                    <Route path="/my-tasks" element={
+                      <MyTasks
+                        tasks={tasks ?? []}
+                        onTaskUpdate={handleTaskUpdate}
+                        onTasksUpdate={handleTasksUpdate}
+                      />
+                    } />
+                    <Route path="/all-tasks" element={
+                      <AllTasks
+                        tasks={tasks ?? []}
+                        onTaskUpdate={handleTaskUpdate}
+                        onTasksUpdate={handleTasksUpdate}
+                      />
+                    } />
+                    <Route path="/bill-tasks" element={
+                      <BillTasks
+                        tasks={tasks ?? []}
+                        onTaskUpdate={handleTaskUpdate}
+                        onTasksUpdate={handleTasksUpdate}
+                      />
+                    } />
+                    <Route path="/settings" element={<Settings />} />
+                    <Route path="/hours-report" element={<HoursReportList />} />
+                    <Route path="/workload" element={<WorkloadView />} />
+                    <Route path="*" element={<Navigate to="/my-tasks" />} />
+                  </Routes>
+                </main>
+              </>
+            }
+          />
+        </Routes>
       </div>
     </div>
+  );
+}
+
+function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState(() => {
+    return !!sessionStorage.getItem('selectedProject') || !!localStorage.getItem('token');
+  });
+
+  const handleLogin = (username: string) => {
+    setIsLoggedIn(true);
+  };
+
+  return (
+    <Routes>
+      <Route
+        path="/login"
+        element={isLoggedIn ? <Navigate to="/my-tasks" /> : <Login onLogin={handleLogin} />}
+      />
+      <Route
+        path="/*"
+        element={isLoggedIn ? <AppLayout /> : <Navigate to="/login" />}
+      />
+    </Routes>
   );
 }
 

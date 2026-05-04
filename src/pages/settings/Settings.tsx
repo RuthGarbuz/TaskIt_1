@@ -13,7 +13,7 @@ export default function Settings() {
 
   const tabs = [
     { id: 'general' as SettingsTab, label: 'הגדרות כלליות', icon: SettingsIcon },
-    { id: 'workCapacity' as SettingsTab, label: 'היקף משרה', icon: Users },
+    { id: 'workCapacity' as SettingsTab, label: 'הגדרת היקף משרה', icon: Users },
     { id: 'templates' as SettingsTab, label: 'תבניות ונושאי תכנון', icon: FileText },
     { id: 'tables' as SettingsTab, label: 'טבלאות מערכת', icon: Table },
      { id: 'users'  as SettingsTab, label: 'משתמשים',  icon: Users        },
@@ -24,10 +24,10 @@ export default function Settings() {
       {/* Responsive container */}
       <div className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
         {/* Header */}
-        <div className="mb-4 sm:mb-6">
+        {/* <div className="mb-4 sm:mb-6">
           <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-800">הגדרות</h1>
           <p className="text-xs sm:text-sm text-gray-600 mt-1">ניהול הגדרות המערכת</p>
-        </div>
+        </div> */}
 
         {/* Tabs Container */}
         <div className="bg-white rounded-lg sm:rounded-xl shadow-sm border border-gray-200 sm:border-2">

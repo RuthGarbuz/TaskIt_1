@@ -1,57 +1,88 @@
-import { useState } from 'react';
-import { Clock, Calendar, X, CheckCircle, AlertCircle } from 'lucide-react';
-import type { Task } from '../../types';
+import { useEffect, useState } from 'react';
+import { Clock, Calendar, X, CheckCircle, AlertCircle, Trash2 } from 'lucide-react';
 import type { TaskReview } from '../../Data/projectsData';
+import { insertHourReport, updateHourReport } from '../../services/hourReportService';
+import type { HoursReport } from '../../Data/HoursReportData';
 
 interface HoursReportModalProps {
-  task: Task | TaskReview;
+  task:  TaskReview;
+  editReport?: HoursReport|null;
   onClose: () => void;
   onSave: (report: HoursReport) => void;
+  onDelete?: (id: number) => Promise<void> | void;
 }
 
-export interface HoursReport {
-  taskId: number;
-  reportDate: string;
-  fromTime: string;
-  toTime: string;
-  totalHours: number;
-  inputMode: 'range' | 'total';
-  notes?: string;
-}
 
-export default function HoursReportModal({ task, onClose, onSave }: HoursReportModalProps) {
+
+export default function HoursReportModal({ task, editReport, onClose, onSave, onDelete }: HoursReportModalProps) {
   const today = new Date().toISOString().split('T')[0];
-
-  const [reportDate, setReportDate] = useState(today);
-  const [fromTime, setFromTime] = useState('09:00');
-  const [toTime, setToTime] = useState('17:00');
-  const [totalHours, setTotalHours] = useState<string>('');
-  const [inputMode, setInputMode] = useState<'range' | 'total'>('range');
-  const [notes, setNotes] = useState('');
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
+  const [report, setReport] = useState<HoursReport | null>(null);
+
+  const getInitialReport = (): HoursReport => ({
+    id: 0,
+    taskId: task.id,
+    reportDate: today,
+    fromTime: '09:00',
+    toTime: '17:00',
+    totalHours: 0,
+    inputMode: 'range',
+    notes: '',
+  });
+
+  const toDateInputValue = (value?: string | null): string => {
+    if (!value) return '';
+    const direct = value.split('T')[0];
+    if (/^\d{4}-\d{2}-\d{2}$/.test(direct)) return direct;
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return parsed.toISOString().split('T')[0];
+  };
+
+  useEffect(() => {
+    if(editReport){
+      setReport({
+        ...editReport,
+        reportDate: toDateInputValue(editReport.reportDate),
+      });//edit
+      return;
+    }
+    setReport(getInitialReport());//new
+  }, [task.id, editReport]);
+
+  const updateReport = (patch: Partial<HoursReport>) => {
+    setReport((prev) => ({
+      ...(prev ?? getInitialReport()),
+      ...patch,
+    }));
+  };
 
   const calcHoursFromRange = (): number => {
-    if (!fromTime || !toTime) return 0;
-    const [fh, fm] = fromTime.split(':').map(Number);
-    const [th, tm] = toTime.split(':').map(Number);
+    const currentReport = report ?? getInitialReport();
+    if (!currentReport.fromTime || !currentReport.toTime) return 0;
+    const [fh, fm] = currentReport.fromTime.split(':').map(Number);
+    const [th, tm] = currentReport.toTime.split(':').map(Number);
     const diff = (th * 60 + tm) - (fh * 60 + fm);
     return Math.max(0, diff / 60);
   };
 
-  const displayedHours = inputMode === 'range'
+  const displayedHours = (report?.inputMode ?? 'range') === 'range'
     ? calcHoursFromRange()
-    : parseFloat(totalHours) || 0;
+    : report?.totalHours || 0;
 
-  const handleSave = () => {
+  const handleSave = async () => {
     setError('');
 
-    if (!reportDate) {
+    const currentReport = report ?? getInitialReport();
+
+    if (!currentReport.reportDate) {
       setError('נא להזין תאריך דיווח');
       return;
     }
-    if (inputMode === 'range') {
-      if (!fromTime || !toTime) {
+    if (currentReport.inputMode === 'range') {
+      if (!currentReport.fromTime || !currentReport.toTime) {
         setError('נא להזין שעת התחלה וסיום');
         return;
       }
@@ -59,28 +90,48 @@ export default function HoursReportModal({ task, onClose, onSave }: HoursReportM
         setError('שעת הסיום חייבת להיות אחרי שעת ההתחלה');
         return;
       }
-    } else {
-      if (!totalHours || parseFloat(totalHours) <= 0) {
-        setError('נא להזין מספר שעות תקין');
-        return;
-      }
+    } else if (!currentReport.totalHours || currentReport.totalHours <= 0) {
+      setError('נא להזין מספר שעות תקין');
+      return;
     }
 
-    const report: HoursReport = {
+    const reportToSave: HoursReport = {
+      ...currentReport,
       taskId: task.id,
-      reportDate,
-      fromTime: inputMode === 'range' ? fromTime : '',
-      toTime: inputMode === 'range' ? toTime : '',
+      fromTime: currentReport.inputMode === 'range' ? currentReport.fromTime : '',
+      toTime: currentReport.inputMode === 'range' ? currentReport.toTime : '',
       totalHours: displayedHours,
-      inputMode,
-      notes: notes.trim() || undefined,
+      notes: currentReport.notes?.trim() || undefined,
     };
 
-    setSaved(true);
-    setTimeout(() => {
-      onSave(report);
+    try {
+      if(report?.id&& report.id >0){
+        await updateHourReport(report);
+      }else
+      {
+      await insertHourReport(reportToSave,task.projectId,!task.isPlanningSte);
+      }
+      setSaved(true);
+      setTimeout(() => {
+        onSave(reportToSave);
+        onClose();
+        setReport(null);
+      }, 900);
+    } catch {
+      setError('שמירת הדיווח נכשלה, נסה שוב');
+      setSaved(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!onDelete || !report?.id || report.id <= 0) return;
+    try {
+      await onDelete(report.id);
       onClose();
-    }, 900);
+      setReport(null);
+    } catch {
+      setError('מחיקת הדיווח נכשלה, נסה שוב');
+    }
   };
 
   return (
@@ -111,11 +162,11 @@ export default function HoursReportModal({ task, onClose, onSave }: HoursReportM
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div>
               <span className="text-gray-500 text-xs block mb-0.5">פרויקט</span>
-              <span className="font-semibold text-gray-800">{'project' in task ? task.project : task.projectName}</span>
+              <span className="font-semibold text-gray-800">{task.projectName}</span>
             </div>
             <div>
               <span className="text-gray-500 text-xs block mb-0.5">שלב / משימה</span>
-              <span className="font-semibold text-gray-800 truncate block">{'stage' in task ? (task.stage || task.subject) : (task.name || task.subject)}</span>
+              <span className="font-semibold text-gray-800 truncate block">{task.name}</span>
             </div>
           </div>
         </div>
@@ -131,8 +182,8 @@ export default function HoursReportModal({ task, onClose, onSave }: HoursReportM
             </label>
             <input
               type="date"
-              value={reportDate}
-              onChange={(e) => setReportDate(e.target.value)}
+              value={report?.reportDate ?? ''}
+              onChange={(e) => updateReport({ reportDate: e.target.value })}
               className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 transition-all"
             />
           </div>
@@ -142,9 +193,9 @@ export default function HoursReportModal({ task, onClose, onSave }: HoursReportM
             <label className="block text-sm font-semibold text-gray-700 mb-1.5">שיטת דיווח</label>
             <div className="grid grid-cols-2 gap-2">
               <button
-                onClick={() => setInputMode('range')}
+                onClick={() => updateReport({ inputMode: 'range' })}
                 className={`py-2 px-3 rounded-lg text-sm font-semibold border-2 transition-all ${
-                  inputMode === 'range'
+                  (report?.inputMode ?? 'range') === 'range'
                     ? 'bg-emerald-500 text-white border-emerald-500 shadow-sm'
                     : 'bg-white text-gray-600 border-gray-200 hover:border-emerald-300'
                 }`}
@@ -152,9 +203,9 @@ export default function HoursReportModal({ task, onClose, onSave }: HoursReportM
                 מ-שעה עד שעה
               </button>
               <button
-                onClick={() => setInputMode('total')}
+                onClick={() => updateReport({ inputMode: 'total' })}
                 className={`py-2 px-3 rounded-lg text-sm font-semibold border-2 transition-all ${
-                  inputMode === 'total'
+                  (report?.inputMode ?? 'range') === 'total'
                     ? 'bg-emerald-500 text-white border-emerald-500 shadow-sm'
                     : 'bg-white text-gray-600 border-gray-200 hover:border-emerald-300'
                 }`}
@@ -165,14 +216,14 @@ export default function HoursReportModal({ task, onClose, onSave }: HoursReportM
           </div>
 
           {/* Range inputs */}
-          {inputMode === 'range' && (
+          {(report?.inputMode ?? 'range') === 'range' && (
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-semibold text-gray-600 mb-1">משעה</label>
                 <input
                   type="time"
-                  value={fromTime}
-                  onChange={(e) => setFromTime(e.target.value)}
+                  value={report?.fromTime ?? ''}
+                  onChange={(e) => updateReport({ fromTime: e.target.value })}
                   className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 transition-all"
                 />
               </div>
@@ -180,8 +231,8 @@ export default function HoursReportModal({ task, onClose, onSave }: HoursReportM
                 <label className="block text-xs font-semibold text-gray-600 mb-1">עד שעה</label>
                 <input
                   type="time"
-                  value={toTime}
-                  onChange={(e) => setToTime(e.target.value)}
+                  value={report?.toTime ?? ''}
+                  onChange={(e) => updateReport({ toTime: e.target.value })}
                   className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 transition-all"
                 />
               </div>
@@ -189,7 +240,7 @@ export default function HoursReportModal({ task, onClose, onSave }: HoursReportM
           )}
 
           {/* Total hours input */}
-          {inputMode === 'total' && (
+          {(report?.inputMode ?? 'range') === 'total' && (
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1">מספר שעות</label>
               <input
@@ -197,8 +248,8 @@ export default function HoursReportModal({ task, onClose, onSave }: HoursReportM
                 min="0.5"
                 max="24"
                 step="0.5"
-                value={totalHours}
-                onChange={(e) => setTotalHours(e.target.value)}
+                value={report?.totalHours || ''}
+                onChange={(e) => updateReport({ totalHours: e.target.value ? parseFloat(e.target.value) : 0 })}
                 placeholder="לדוגמה: 3.5"
                 className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 transition-all"
               />
@@ -219,8 +270,8 @@ export default function HoursReportModal({ task, onClose, onSave }: HoursReportM
           <div>
             <label className="block text-xs font-semibold text-gray-600 mb-1">הערה (אופציונלי)</label>
             <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
+              value={report?.notes ?? ''}
+              onChange={(e) => updateReport({ notes: e.target.value })}
               placeholder="הוסף הערה לדיווח..."
               rows={2}
               className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 transition-all resize-none"
@@ -238,6 +289,15 @@ export default function HoursReportModal({ task, onClose, onSave }: HoursReportM
 
         {/* Footer */}
         <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex gap-3">
+          {report?.id && report.id > 0 && (
+            <button
+              onClick={handleDelete}
+              className="py-2.5 px-4 border-2 border-red-200 text-red-600 rounded-lg text-sm font-semibold hover:bg-red-50 transition-all flex items-center justify-center gap-2"
+            >
+              <Trash2 size={16} />
+              מחק
+            </button>
+          )}
           <button
             onClick={onClose}
             className="flex-1 py-2.5 border-2 border-gray-300 text-gray-700 rounded-lg text-sm font-semibold hover:bg-gray-100 transition-all"

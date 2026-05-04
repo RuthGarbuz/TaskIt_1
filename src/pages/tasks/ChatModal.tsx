@@ -1,90 +1,212 @@
-import { useEffect, useState } from 'react';
-import { MessageSquare, X, } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { MessageSquare, X, Edit2, Trash2, Check } from 'lucide-react';
 import type { TaskChatMessage, TaskReview } from '../../Data/projectsData';
-import { getChatData, insertChatAsync } from '../../services/taskService';
+import { getEmployees, type EmployeeBasic } from '../../services/templatesSettingServices';
+import authService from '../../services/authService';
+import { deletePlanningChat, getChatData, insertChatAsync, updatePlanningChat } from '../../services/chatService';
 
 interface ChatModalProps {
   task: TaskReview;
   setTask: React.Dispatch<React.SetStateAction<TaskReview | null>>;
   onClose: () => void;
-  
+  initialMessages?: TaskChatMessage[];
 }
 
-export default function ChatModal({ task, onClose ,setTask}: ChatModalProps) {
+export default function ChatModal({ task, onClose, setTask, initialMessages }: ChatModalProps) {
   const [messages, setMessages] = useState<TaskChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
   const [chatMessage, setChatMessage] = useState('');
-  const [showLinkInput, setShowLinkInput] = useState(false);
-  const [linkUrl, setLinkUrl] = useState('');
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingText, setEditingText] = useState('');
 
+  // ─── Mention state ─────────────────────────────────────────────────────────
+  const [employees, setEmployees] = useState<EmployeeBasic[]>([]);
+  const [showMention, setShowMention] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState('');
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [selectedReceivers, setSelectedReceivers] = useState<EmployeeBasic[]>([]);
+  const [atPosition, setAtPosition] = useState<number>(-1);
+
+  const inputRef = useRef<HTMLInputElement>(null);
+  const currentUserId = authService.getCurrentUser()?.id ?? 0;
+
+  // ─── Load chat ─────────────────────────────────────────────────────────────
   useEffect(() => {
     let isMounted = true;
-
     const loadChat = async () => {
       try {
         setLoading(true);
-        if(task.hasChat === false) {
-          setMessages([]);
+        if (initialMessages && initialMessages.length > 0) {
+          if (isMounted) {
+            setMessages(initialMessages);
+            setError(null);
+          }
           return;
         }
+        if (task.hasChat === false) { setMessages([]); return; }
         const data = await getChatData(task.id, !task.isPlanningSte);
-        if (isMounted) {
-          setMessages(data ?? []);
-          setError(null);
-        }
-      } catch (err) {
-        if (isMounted) {
-          setError('שגיאה בטעינת הודעות');
-          setMessages([]);
-        }
+        if (isMounted) { setMessages(data ?? []); setError(null); }
+      } catch {
+        if (isMounted) { setError('שגיאה בטעינת הודעות'); setMessages([]); }
       } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+        if (isMounted) setLoading(false);
       }
     };
-
     loadChat();
-    return () => {
-      isMounted = false;
-    };
-  }, [task.id]);
-const handleSendMessage = async () => {
-  if (!chatMessage.trim()) return;
+    return () => { isMounted = false; };
+  }, [task.id, initialMessages]);
 
-  try {
-    setLoading(true);
-    await insertChatAsync(task.id, chatMessage.trim(), !task.isPlanningSte);
-    setTask(prev => (prev ? { ...prev, hasChat: true } : prev));
-    setChatMessage('');
+  useEffect(() => {
+    if (!loading) setTimeout(() => inputRef.current?.focus(), 50);
+  }, [loading]);
 
-    const data = await getChatData(task.id, !task.isPlanningSte);
-    setMessages(data ?? []);
-    setError(null);
-  } catch (err) {
-    setError('שגיאה בשליחת הודעה');
-  } finally {
-    setLoading(false);
-  }
-};
-  // const handleSendMessage = () => {
-  //   if (!chatMessage.trim()) return;
-  //   // TODO: call send API here
-  //   setChatMessage('');
-  // };
+  // ─── Load employees lazily ─────────────────────────────────────────────────
+  const ensureEmployeesLoaded = async () => {
+    if (employees.length > 0) return;
+    try {
+      const list = await getEmployees();
+      setEmployees(list);
+    } catch {
+      console.error('Failed to load employees');
+    }
+  };
 
-  const handleAddLink = () => {
-    if (!linkUrl.trim()) return;
-    setChatMessage(prev => `${prev} ${linkUrl}`.trim());
-    setLinkUrl('');
-    setShowLinkInput(false);
+  // ─── Input change — detect @ ───────────────────────────────────────────────
+  const handleInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    const cursor = e.target.selectionStart ?? val.length;
+    setChatMessage(val);
+
+    const textBeforeCursor = val.slice(0, cursor);
+    const atIdx = textBeforeCursor.lastIndexOf('@');
+
+    if (atIdx !== -1) {
+      const query = textBeforeCursor.slice(atIdx + 1);
+      if (!query.includes(' ')) {
+        await ensureEmployeesLoaded();
+        setAtPosition(atIdx);
+        setMentionQuery(query);
+        setMentionIndex(0);
+        setShowMention(true);
+        return;
+      }
+    }
+
+    setShowMention(false);
+    setMentionQuery('');
+  };
+
+  // ─── Filter employees — hide already selected ─────────────────────────────
+  const filteredEmployees = employees.filter(e =>
+    e.name.toLowerCase().includes(mentionQuery.toLowerCase()) &&
+    !selectedReceivers.find(r => r.id === e.id)
+  );
+
+  // ─── Select employee — add to receivers list ───────────────────────────────
+  const selectEmployee = (emp: EmployeeBasic) => {
+    const before = chatMessage.slice(0, atPosition);
+    const after = chatMessage.slice(atPosition + 1 + mentionQuery.length);
+    setChatMessage(`${before}@${emp.name} ${after}`);
+    setSelectedReceivers(prev => [...prev, emp]);
+    setShowMention(false);
+    setMentionQuery('');
+    inputRef.current?.focus();
+  };
+
+  // ─── Remove receiver ───────────────────────────────────────────────────────
+  const removeReceiver = (emp: EmployeeBasic) => {
+    setChatMessage(prev => prev.replace(`@${emp.name}`, '').replace(/\s+/g, ' ').trim());
+    setSelectedReceivers(prev => prev.filter(r => r.id !== emp.id));
+  };
+
+  // ─── Keyboard navigation ───────────────────────────────────────────────────
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (showMention && filteredEmployees.length > 0) {
+      if (e.key === 'ArrowDown')  { e.preventDefault(); setMentionIndex(i => Math.min(i + 1, filteredEmployees.length - 1)); return; }
+      if (e.key === 'ArrowUp')    { e.preventDefault(); setMentionIndex(i => Math.max(i - 1, 0)); return; }
+      if (e.key === 'Enter')      { e.preventDefault(); selectEmployee(filteredEmployees[mentionIndex]); return; }
+      if (e.key === 'Escape')     { setShowMention(false); return; }
+    }
+    if (e.key === 'Enter' && !e.shiftKey && !showMention) {
+      e.preventDefault();
+      handleSendMessage();
+    }
+  };
+
+  // ─── Auto-clear receivers removed from text ───────────────────────────────
+  useEffect(() => {
+    setSelectedReceivers(prev =>
+      prev.filter(r => chatMessage.includes(`@${r.name}`))
+    );
+  }, [chatMessage]);
+
+  // ─── Send message ──────────────────────────────────────────────────────────
+  const handleSendMessage = async () => {
+    if (!chatMessage.trim()) return;
+    try {
+      setLoading(true);
+
+      // הסר את כל ה-@שמות מהטקסט — רק הטקסט הנקי נשלח ל-API
+      let cleanMessage = chatMessage;
+      selectedReceivers.forEach(r => {
+        cleanMessage = cleanMessage.replace(`@${r.name}`, '');
+      });
+      cleanMessage = cleanMessage.replace(/\s+/g, ' ').trim();
+  
+      if (!cleanMessage) {
+        setError('נא להזין טקסט הודעה');
+        setLoading(false);
+        return;
+      }
+
+      await insertChatAsync(
+        task.id,
+        cleanMessage,                                                              // טקסט נקי בלי @שמות
+        !task.isPlanningSte,
+        selectedReceivers.length > 0 ? selectedReceivers.map(r => r.id) : undefined  // IDs של נמענים
+      );
+
+      setTask(prev => (prev ? { ...prev, hasChat: true } : prev));
+      setChatMessage('');
+      setSelectedReceivers([]);
+      const data = await getChatData(task.id, !task.isPlanningSte);
+      setMessages(data ?? []);
+      setError(null);
+    } catch {
+      setError('שגיאה בשליחת הודעה');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteMessage = async (msgId: number) => {
+    try {
+      await deletePlanningChat(msgId, !task.isPlanningSte);
+      setMessages(prev => prev.filter(m => m.id !== msgId));
+    } catch {
+      setError('שגיאה במחיקת הודעה');
+    }
+  };
+
+  const handleEditSave = async (msgId: number) => {
+    const nextMessage = editingText.trim();
+    if (!nextMessage) return;
+    try {
+      await updatePlanningChat(msgId, !task.isPlanningSte, nextMessage);
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, message: nextMessage } : m));
+      setEditingId(null);
+      setEditingText('');
+    } catch {
+      setError('שגיאה בעדכון הודעה');
+    }
   };
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+
+        {/* Header */}
         <div className="bg-gradient-to-r from-blue-500 to-purple-500 px-6 py-4 rounded-t-xl flex items-center justify-between">
           <div className="flex items-center gap-3">
             <MessageSquare size={26} className="text-white" />
@@ -93,53 +215,69 @@ const handleSendMessage = async () => {
               <p className="text-sm text-blue-100">{task.subject}</p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="text-white hover:bg-white hover:bg-opacity-20 rounded-full p-2 w-9 h-9 flex items-center justify-center font-bold text-xl transition-all"
-          >
+          <button onClick={onClose} className="text-white hover:bg-white hover:bg-opacity-20 rounded-full p-2 w-9 h-9 flex items-center justify-center font-bold text-xl transition-all">
             <X size={18} />
           </button>
         </div>
 
+        {/* Messages */}
         <div className="flex-1 p-6 overflow-y-auto bg-gray-50">
           <div className="space-y-4">
+
             <div className="bg-white rounded-lg p-4 shadow-sm border border-gray-200">
               <p className="text-sm text-gray-600 mb-2">💬 אזור הצ'אט של המשימה</p>
               <div className="text-xs text-gray-500 bg-blue-50 p-3 rounded">
-                <strong>פרויקט:</strong> {task.projectName}
-                <br />
-                <strong>סטטוס:</strong> {task.statusName}
+                <strong>סטטוס פרויקט:</strong> {task.projectName}
               </div>
             </div>
 
-            {loading && (
-              <div className="text-center text-gray-400 text-sm py-4">טוען הודעות...</div>
-            )}
-
-            {!loading && error && (
-              <div className="text-center text-red-500 text-sm py-4">{error}</div>
-            )}
-
+            {loading && <div className="text-center text-gray-400 text-sm py-4">טוען הודעות...</div>}
+            {!loading && error && <div className="text-center text-red-500 text-sm py-4">{error}</div>}
             {!loading && !error && messages.length === 0 && (
-              <div className="text-center text-gray-400 text-sm py-8">
-                ההודעות יופיעו כאן
-              </div>
+              <div className="text-center text-gray-400 text-sm py-8">ההודעות יופיעו כאן</div>
             )}
 
             {!loading && !error && messages.length > 0 && (
               <div className="space-y-3">
-                {messages.map((msg) => (
+                {messages.map(msg => (
                   <div key={msg.id} className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm">
                     <div className="flex items-start gap-3">
                       <div className="w-10 h-10 rounded-full bg-gradient-to-r from-pink-400 to-purple-400 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
-                        {msg.senderName}
+                        {msg.senderName?.[0] ?? '?'}
                       </div>
                       <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className="font-semibold text-gray-900">{msg.senderName}</span>
-                          <span className="text-sm text-gray-500">{new Date(msg.createDate).toLocaleString('he-IL')}</span>
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-gray-900">{msg.senderName}</span>
+                            <span className="text-sm text-gray-500">{new Date(msg.createDate).toLocaleString('he-IL')}</span>
+                          </div>
+                          {msg.senderID === currentUserId && (
+                            <div className="flex items-center gap-1">
+                              <button onClick={() => { setEditingId(msg.id); setEditingText(msg.message); }} className="p-1 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded transition-all" title="ערוך הודעה">
+                                <Edit2 size={13} />
+                              </button>
+                              <button onClick={() => handleDeleteMessage(msg.id)} className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-all" title="מחק הודעה">
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          )}
                         </div>
-                        <p className="text-gray-700 text-sm">{msg.message}</p>
+                        {editingId === msg.id ? (
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={editingText}
+                              onChange={e => setEditingText(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') handleEditSave(msg.id); if (e.key === 'Escape') { setEditingId(null); setEditingText(''); } }}
+                              autoFocus
+                              className="flex-1 px-3 py-1.5 border-2 border-blue-400 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+                            />
+                            <button onClick={() => handleEditSave(msg.id)} className="p-1.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600"><Check size={14} /></button>
+                            <button onClick={() => { setEditingId(null); setEditingText(''); }} className="p-1.5 bg-gray-200 text-gray-600 rounded-lg hover:bg-gray-300"><X size={14} /></button>
+                          </div>
+                        ) : (
+                          <p className="text-gray-700 text-sm">{msg.message}</p>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -149,47 +287,76 @@ const handleSendMessage = async () => {
           </div>
         </div>
 
+        {/* Input area */}
         <div className="border-t border-gray-200 p-4 bg-white rounded-b-xl">
-          <div className="flex gap-2 mb-3">
-            <input
-              type="text"
-              value={chatMessage}
-              onChange={(e) => setChatMessage(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } }}
-              placeholder="כתוב הודעה..."
-              className="flex-1 px-4 py-2.5 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            />
-            <button
-              onClick={handleSendMessage}
-              disabled={!chatMessage.trim()}
-              className="px-6 py-2.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 font-bold transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              שלח
-            </button>
-          </div>
 
-          {showLinkInput && (
-            <div className="mb-3 flex gap-2">
-              <input
-                type="url"
-                value={linkUrl}
-                onChange={(e) => setLinkUrl(e.target.value)}
-                placeholder="הזן קישור (URL)..."
-                className="flex-1 px-4 py-2 border-2 border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
-              />
-              <button onClick={handleAddLink} className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm font-semibold">הוסף</button>
-              <button onClick={() => setShowLinkInput(false)} className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-sm">ביטול</button>
+          {/* Selected receivers badges */}
+          {selectedReceivers.length > 0 && (
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <span className="text-xs text-gray-500">נשלח ל:</span>
+              {selectedReceivers.map(r => (
+                <span
+                  key={r.id}
+                  className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200"
+                >
+                  @{r.name}
+                  <button onClick={() => removeReceiver(r)} className="hover:text-blue-900 ml-0.5">
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
             </div>
           )}
 
-          {/* <div className="flex items-center gap-2">
-            <button className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-all" title="הזכר אנשים">@</button>
-            <button onClick={() => setShowLinkInput(!showLinkInput)} className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-all" title="הוסף קישור"><LinkIcon size={18} /></button>
-            <button className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-all" title="הוסף קובץ"><Paperclip size={18} /></button>
-            <button className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-all" title="הוסף תמונה"><ImageIcon size={18} /></button>
-            <button className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-all" title="אימוג'י"><Smile size={18} /></button>
-          </div> */}
+          {/* Mention dropdown + input */}
+          <div className="relative">
+            {showMention && filteredEmployees.length > 0 && (
+              <div className="absolute bottom-full mb-1 right-0 w-64 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden">
+                <div className="px-3 py-2 bg-gray-50 border-b border-gray-100">
+                  <span className="text-xs font-medium text-gray-500">בחר עובד לשליחה פרטית</span>
+                </div>
+                <ul className="max-h-48 overflow-y-auto py-1">
+                  {filteredEmployees.map((emp, idx) => (
+                    <li
+                      key={emp.id}
+                      onClick={() => selectEmployee(emp)}
+                      className={`flex items-center gap-2.5 px-3 py-2 cursor-pointer transition-colors ${
+                        idx === mentionIndex ? 'bg-blue-50' : 'hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-medium flex-shrink-0">
+                        {emp.name[0]}
+                      </div>
+                      <span className={`text-sm ${idx === mentionIndex ? 'text-blue-700 font-medium' : 'text-gray-700'}`}>
+                        {emp.name}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <input
+                ref={inputRef}
+                type="text"
+                value={chatMessage}
+                onChange={handleInputChange}
+                onKeyDown={handleKeyDown}
+                placeholder="כתוב הודעה... (@ לשליחה לעובד ספציפי)"
+                className="flex-1 px-4 py-2.5 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+              />
+              <button
+                onClick={handleSendMessage}
+                disabled={!chatMessage.trim() || loading}
+                className="px-6 py-2.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 font-bold transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                שלח
+              </button>
+            </div>
+          </div>
         </div>
+
       </div>
     </div>
   );

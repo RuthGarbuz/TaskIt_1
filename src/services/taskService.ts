@@ -1,5 +1,7 @@
-import type { BasicQuery, EmployeeLink, GetChatDataRequest, GetMyTasksRequest, GetTasksRequest, SystemTable, TaskChatMessage, TaskReview, TaskUpdatePatch } from "../Data/projectsData";
+import type { BasicQuery, DependsOnStepData, DependsOnTaskData, EmployeeLink, GetMyTasksRequest, GetTasksRequest, SubContractData, SystemTable, TaskReview, TaskUpdatePatch } from "../Data/projectsData";
 import authService from "./authService";
+
+
 
 const getAuthenticatedUser = () => {
 	const user = authService.getCurrentUser();
@@ -14,6 +16,10 @@ const buildEndpoint = (baseUrl: string, path: string): string => `${baseUrl}${pa
 const buildPostOptions = (body: unknown) => ({
 	method: "POST" as const,
 	body: JSON.stringify(body)
+});
+
+const buildGetOptions = () => ({
+	method: "GET" as const
 });
 
 export const getTaskStatuses = async (): Promise<SystemTable[]> => {
@@ -60,18 +66,36 @@ export const getTaskPriorities = async (): Promise<SystemTable[]> => {
 	}
 };
 
-export const getTasks = async (projectId:number,fromDate:string|null,toDate:string|null
-	
+export const getTasks = async (
+	projectId: number,
+	fromDate: string | null,
+	toDate: string | null,
+    closedTasks?: boolean,
+	filters?: {
+		statusIds?: number[];
+		priorityIds?: number[];
+		projectIds?: number[];
+		employeeIds?: number[];
+	}
 ): Promise<TaskReview[]> => {
 	try {
+		if ((projectId ?? 0) > 0) {
+			return await getTasksForProject(projectId);
+		}
+
 		const user = getAuthenticatedUser();
 		const query: GetTasksRequest = {
 			database: user.dataBase,
-			projectId: projectId??0,
+			projectId: projectId ?? 0,
 			employeeId: user.id,
 			permissionType: user.permissionId,
 			fromDate: toNullableIsoDate(fromDate),
-			toDate: toNullableIsoDate(toDate)
+			toDate: toNullableIsoDate(toDate),
+            closedTasks,
+			statusIds: filters?.statusIds,
+			priorityIds: filters?.priorityIds,
+			projectIds: filters?.projectIds,
+			employeeIds: filters?.employeeIds
 		};
 
 		const endpoint = buildEndpoint(user.urlConnection, "/Tasks/GetAllTasks");
@@ -91,13 +115,62 @@ export const getTasks = async (projectId:number,fromDate:string|null,toDate:stri
 	}
 };
 
+export const getTasksForProject = async (projectId: number): Promise<TaskReview[]> => {
+	try {
+		const user = getAuthenticatedUser();
+		const endpoint = buildEndpoint(
+			user.urlConnection,
+			`/Tasks/GetTasksForProject?database=${encodeURIComponent(user.dataBase)}&projectId=${projectId}`
+		);
+		const response = await authService.makeAuthenticatedRequest(endpoint, buildGetOptions());
+
+		if (!response.ok) {
+			throw new Error(`Failed to fetch project tasks: ${response.statusText}`);
+		}
+
+		return await response.json();
+	} catch (error) {
+		console.error("Error fetching project tasks:", error);
+		throw error;
+	}
+};
+
+export const getSubContractData = async (stepId: number): Promise<SubContractData[]> => {
+	try {
+		const user = getAuthenticatedUser();
+		const endpoint = buildEndpoint(
+			user.urlConnection,
+			`/Tasks/GetSubContractData?database=${encodeURIComponent(user.dataBase)}&stepId=${stepId}`
+		);
+		const response = await authService.makeAuthenticatedRequest(endpoint, buildGetOptions());
+
+		if (!response.ok) {
+			throw new Error(`Failed to fetch sub contract data: ${response.statusText}`);
+		}
+
+		return await response.json();
+	} catch (error) {
+		console.error("Error fetching sub contract data:", error);
+		throw error;
+	}
+};
+
 const toNullableIsoDate = (value?: string | null): string | null => {
 	if (!value) return null;
 	const date = new Date(value);
 	return Number.isNaN(date.getTime()) ? null : date.toISOString();
 };
 
-export const getMyTasks = async (fromDate:string|null,toDate:string|null
+export const getMyTasks = async (
+	fromDate: string | null,
+	toDate: string | null,
+    closedTasks?: boolean,
+	filters?: {
+		statusIds?: number[];
+		priorityIds?: number[];
+		projectIds?: number[];
+		employeeIds?: number[];
+	}
 ): Promise<TaskReview[]> => {
 	try {
 		const user = getAuthenticatedUser();
@@ -105,7 +178,12 @@ export const getMyTasks = async (fromDate:string|null,toDate:string|null
 			database: user.dataBase,
 			employeeId: user.id,
 			fromDate: toNullableIsoDate(fromDate),
-			toDate: toNullableIsoDate(toDate)
+			toDate: toNullableIsoDate(toDate),
+			statusIds: filters?.statusIds,
+			priorityIds: filters?.priorityIds,
+			projectIds: filters?.projectIds,
+			employeeIds: filters?.employeeIds,
+            closedTasks: closedTasks
 		};
 
 		const endpoint = buildEndpoint(user.urlConnection, "/Tasks/GetMyTasks");
@@ -125,62 +203,8 @@ export const getMyTasks = async (fromDate:string|null,toDate:string|null
 	}
 };
 
-export const getChatData = async (id: number,isTask: boolean): Promise<TaskChatMessage[]> => {
-	try {
-		const user = getAuthenticatedUser();
-		const query= {
-			database: user.dataBase,
-			id:id,
-			isTask:isTask
-		};
 
-		const endpoint = buildEndpoint(user.urlConnection, "/Tasks/GetChatData");
-		const response = await authService.makeAuthenticatedRequest(
-			endpoint,
-			buildPostOptions(query)
-		);
 
-		if (!response.ok) {
-			throw new Error(`Failed to fetch chat data: ${response.statusText}`);
-		}
-
-		return await response.json();
-	} catch (error) {
-		console.error("Error fetching chat data:", error);
-		throw error;
-	}
-};
-export const insertChatAsync = async (
-    id: number,
-    chatMessage: string,
-    isTask: boolean
-): Promise<number> => {
-    try {
-        const user = getAuthenticatedUser();
-        const query = {
-            database: user.dataBase,
-            id,
-            isTask,
-            chatMessage,
-            senderId: user.id
-        };
-
-        const endpoint = buildEndpoint(user.urlConnection, "/Tasks/InsertChatAsync");
-        const response = await authService.makeAuthenticatedRequest(
-            endpoint,
-            buildPostOptions(query)
-        );
-
-        if (!response.ok) {
-            throw new Error(`Failed to insert chat: ${response.statusText}`);
-        }
-
-        return await response.json();
-    } catch (error) {
-        console.error("Error inserting chat:", error);
-        throw error;
-    }
-};
 
 export const updateStatusAsync = async (
     id: number,
@@ -274,6 +298,38 @@ export const getEmployeeLinksAsync = async (
   }
 };
 
+export const getDependsOnDataByIdAsync = async (
+  id: number,
+  isTask: boolean
+): Promise<DependsOnTaskData | DependsOnStepData | null> => {
+  try {
+    const user = getAuthenticatedUser();
+    const baseEndpoint = buildEndpoint(
+      user.urlConnection,
+      isTask ? "/Tasks/DependsOnTaskData" : "/Tasks/DependsOnStepData"
+    );
+    const params = new URLSearchParams({
+      database: user.dataBase,
+      ...(isTask ? { planningTaskId: String(id) } : { planningStepId: String(id) })
+    });
+    const endpoint = `${baseEndpoint}?${params.toString()}`;
+
+    const response = await authService.makeAuthenticatedRequest(
+      endpoint,
+      buildGetOptions()
+    );
+
+    if (!response.ok) {
+      throw new Error(`Failed to load depends-on data: ${response.statusText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Error loading depends-on data:", error);
+    throw error;
+  }
+};
+
 export const updateTaskAsync = async (
     taskUpdate: TaskUpdatePatch,
     employeeLinks: EmployeeLink[],
@@ -358,4 +414,67 @@ export const deleteTaskOrStageAsync = async (
     console.error("Error deleting task/stage:", error);
     throw error;
   }
+};
+export const updateIsClosedAsync = async (
+    id: number,
+    IsClosed: boolean,
+    isTask: boolean,
+): Promise<boolean> => {
+    try {
+        const user = getAuthenticatedUser();
+        const query = {
+            database: user.dataBase,
+            id,
+            IsClosed,
+            isTask,
+
+        };
+
+        const endpoint = buildEndpoint(user.urlConnection, "/Tasks/UpdateClosedAsync");
+        const response = await authService.makeAuthenticatedRequest(
+            endpoint,
+            buildPostOptions(query)
+        );
+
+        if (!response.ok) {
+            throw new Error(`Failed to update Closed: ${response.statusText}`);
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.error("Error updating Closed:", error);
+        throw error;
+    }
+};
+
+export const updateNameAsync = async (
+    id: number,
+    name: string,
+    isTask: boolean,
+): Promise<boolean> => {
+    try {
+        const user = getAuthenticatedUser();
+        const query = {
+            database: user.dataBase,
+            id,
+            name,
+            isTask,
+
+        };
+
+        const endpoint = buildEndpoint(user.urlConnection, "/Tasks/UpdateNameAsync");
+        const response = await authService.makeAuthenticatedRequest(
+            endpoint,
+            buildPostOptions(query)
+        );
+
+        if (!response.ok) {
+            throw new Error(`Failed to update name: ${response.statusText}`);
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.error("Error updating name:", error);
+        throw error;
+    }
 };

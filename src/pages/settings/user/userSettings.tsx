@@ -5,7 +5,7 @@ import type { UserListItem } from '../../../Data/settingsData';
 import MessageBox from '../../shared/MessageBox';
 
 const ROLE_OPTIONS: { value: number; label: string; color: string }[] = [
-  { value: 1,      label: 'Admin',      color: 'bg-red-100 text-red-700 border-red-200'        },
+  { value: 1,   label: 'מנהל',      color: 'bg-red-100 text-red-700 border-red-200'        },
   { value: 2,   label: 'עסקי',       color: 'bg-blue-100 text-blue-700 border-blue-200'     },
   { value: 3,   label: 'ראש צוות',   color: 'bg-purple-100 text-purple-700 border-purple-200'},
   { value: 4,   label: 'עובד',        color: 'bg-gray-100 text-gray-700 border-gray-200'    },
@@ -108,14 +108,14 @@ export default function UsersSettings() {
             <UserIcon size={18} className="text-white" />
           </div>
           <div>
-            <h2 className="text-lg font-bold text-gray-800">ניהול משתמשים</h2>
+            <h2 className="text-base sm:text-lg font-bold text-gray-800">ניהול משתמשים</h2>
             <p className="text-sm text-gray-500">{users.length} משתמשים במערכת</p>
           </div>
         </div>
         <div className="flex gap-3">
           <button
             onClick={handleCancel}
-            className="flex items-center gap-2 px-5 py-2.5 border-2 border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-bold transition-all"
+            className="flex items-center gap-2 px-5 py-2.5 border-2 border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-semibold text-sm transition-all"
           >
             <X size={18} />
             ביטול
@@ -123,7 +123,7 @@ export default function UsersSettings() {
           <button
             onClick={handleSave}
             disabled={isSaving}
-            className="flex items-center gap-2 px-6 py-2.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 font-bold shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-2 px-6 py-2.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 font-semibold shadow-md text-sm w-full sm:w-auto disabled:bg-gray-400 disabled:cursor-not-allowed"
           >
             <Save size={18} />
             {isSaving ? 'שומר...' : 'שמור שינויים'}
@@ -198,7 +198,7 @@ export default function UsersSettings() {
                       readOnly
                       placeholder="user.name"
                       dir="ltr"
-                      className="w-full px-3 py-1.5 text-sm rounded-lg border-2 transition-all focus:outline-none focus:ring-2 focus:ring-indigo-400 font-mono border-transparent bg-transparent"
+                      className="w-full px-3 py-1.5 text-sm text-center rounded-lg border-2 transition-all focus:outline-none focus:ring-2 focus:ring-indigo-400 font-mono border-transparent bg-transparent"
                     />
                   </td>
 

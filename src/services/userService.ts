@@ -1,9 +1,10 @@
+import type { EmployeeNotification } from "../Data/projectsData";
 import type { UserListItem } from "../Data/settingsData";
 import authService from "./authService";
 
 const API_BASE_URL = "https://localhost:7282/api";
 
-
+//const API_BASE_URL = "https://mpweba.master-plan.co.il/TaskItGlobalWebAPI/api";
 
 const getAuthenticatedUser = () => {
 	const user = authService.getCurrentUser();
@@ -17,14 +18,22 @@ const getAuthenticatedUser = () => {
 // 	method: "POST" as const,
 // 	body: JSON.stringify(body)
 // });
-
 export const getUsersList = async (): Promise<UserListItem[]> => {
     try {
-        getAuthenticatedUser();
 
+        const user = getAuthenticatedUser();
+       
+        const request: UserRequest = { 
+            dataBaseName: user.dataBase,
+        };
+ 
         const endpoint = `${API_BASE_URL}/User/GetUsersList`;
         const response = await authService.makeAuthenticatedRequest(endpoint, {
-            method: "POST" as const
+            method: "POST" as const,
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify(request)  // ✅ Send the request body
         });
 
         if (!response.ok) {
@@ -38,10 +47,16 @@ export const getUsersList = async (): Promise<UserListItem[]> => {
     }
 };
 
+export interface UserRequest {
+    dataBaseName: string;
+}
+
 export interface UserPermissionUpdate {
     id: number;
     permissionID: number;
 }
+
+
 
 const buildPostOptions = (body: unknown) => ({
     method: "POST" as const,
@@ -68,3 +83,5 @@ export const saveUsersPermissions = async (updates: UserPermissionUpdate[]): Pro
         throw error;
     }
 };
+
+

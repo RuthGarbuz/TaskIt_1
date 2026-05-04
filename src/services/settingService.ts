@@ -18,6 +18,10 @@ const buildPostOptions = (body: unknown) => ({
   //       }
 });
 
+const buildGetOptions = () => ({
+  method: "GET" as const,
+});
+
 export const getGeneralSettings = async (): Promise<GeneralSettings | null> => {
   try {
     const user = getAuthenticatedUser();
@@ -43,6 +47,41 @@ export const getGeneralSettings = async (): Promise<GeneralSettings | null> => {
     return data;
   } catch (error) {
     console.error('Error fetching general settings:', error);
+    throw error;
+  }
+};
+
+export const getNumberOfHours = async (): Promise<number | null> => {
+  try {
+    const user = getAuthenticatedUser();
+
+    const endpoint = buildEndpoint(
+      user.urlConnection,
+      `/Settings/GetNumberOfHours?database=${encodeURIComponent(user.dataBase)}`
+    );
+
+    const response = await authService.makeAuthenticatedRequest(
+      endpoint,
+      buildGetOptions()
+    );
+
+    if (!response.ok) {
+      if (response.status === 404) return null;
+      throw new Error(`Failed to fetch number of hours: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    if (data == null) return null;
+    if (typeof data === 'number' && Number.isFinite(data)) return data;
+    if (typeof data === 'string') {
+      const normalized = data.replace(',', '.'); // support decimal comma
+      const n = Number(normalized);
+      return Number.isFinite(n) ? n : null;
+    }
+    const n = Number(data);
+    return Number.isFinite(n) ? n : null;
+  } catch (error) {
+    console.error('Error fetching number of hours:', error);
     throw error;
   }
 };
@@ -222,6 +261,10 @@ export const getPriorities = async (): Promise<PriorityItem[]> => {
     throw error;
   }
 };
+
+export const getTaskStatuses = async (): Promise<StatusItem[]> => getStatuses();
+
+export const getTaskPriorities = async (): Promise<PriorityItem[]> => getPriorities();
 
 // Status CRUD operations
 export const insertStatus = async (status: Omit<StatusItem, 'id'>): Promise<number> => {

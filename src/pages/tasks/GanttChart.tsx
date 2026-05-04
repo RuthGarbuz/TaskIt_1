@@ -1,26 +1,24 @@
-import { useState, useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Calendar } from 'lucide-react';
 import type { Task } from '../../types';
-import type { TaskReview } from '../../Data/projectsData';
+import type { EmployeeLink, SystemTable, TaskCardSaveOptions, TaskReview } from '../../Data/projectsData';
+import TaskCard from './TaskCard';
 
 interface GanttChartProps {
-  tasks: Array<Task | TaskReview>;
+  tasks: Array< TaskReview>;
   timeframe: 'weekly' | 'monthly';
   currentView?: 'allTasks' | 'myTasks';
-  onTaskClick?: (task: Task | TaskReview) => void;
+  statuses: SystemTable[];
+  priorities: SystemTable[];
+  onUpdate: (updatedTask: TaskReview, employeeLinks: EmployeeLink[], options?: TaskCardSaveOptions) => void;
+    viewMode: 'myTasks' | 'allTasks';
+ // onTaskUpdate?: (updatedTask: TaskReview) => void;
+  //nTasksUpdate?: (tasks: TaskReview[]) => void;
 }
 
-const URGENCY_COLORS = {
-  low:    { bg: 'bg-slate-400',   name: 'נמוכה'  },
-  medium: { bg: 'bg-blue-500',    name: 'רגילה'  },
-  high:   { bg: 'bg-orange-500',  name: 'גבוהה'  },
-};
+// colors are provided via `statuses: SystemTable[]` and `priorities: SystemTable[]`
 
-const STATUS_COLORS = {
-  todo:       { bg: 'bg-gray-400',    name: 'לביצוע'  },
-  inProgress: { bg: 'bg-blue-500',    name: 'בביצוע'  },
-  done:       { bg: 'bg-green-500',   name: 'הושלם'   },
-};
+
 
 // 10 צבעים ייחודיים לעובדים
 const EMPLOYEE_COLOR_LIST = [
@@ -40,22 +38,32 @@ export default function GanttChart({
   tasks,
   timeframe,
   currentView = 'myTasks',
-  onTaskClick,
+  statuses,
+  priorities,
+  onUpdate,
+  
 }: GanttChartProps) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [colorBy, setColorBy] = useState<'status' | 'urgency' | 'employee'>('urgency');
+  const [selectedTask, setSelectedTask] = useState<TaskReview | null>(null);
+
+  const taskCardStepContext = useMemo(() => {
+    if (!selectedTask || selectedTask.isPlanningSte) {
+      return { planStepListTask: undefined as TaskReview | undefined, tasksInSameStep: undefined as TaskReview[] | undefined };
+    }
+    const step = tasks.find(t => t.isPlanningSte && t.id === selectedTask.planningStepID);
+    if (!step) {
+      return { planStepListTask: undefined as TaskReview | undefined, tasksInSameStep: undefined as TaskReview[] | undefined };
+    }
+    const same = tasks.filter(t => !t.isPlanningSte && t.planningStepID === selectedTask.planningStepID);
+    return { planStepListTask: step, tasksInSameStep: same };
+  }, [selectedTask, tasks]);
 
   // בנה מפת עובד → צבע
   const getReceivers = (task: Task | TaskReview) =>
     'receivers' in task ? (task.receivers ?? []) : ( []);
 
-  const getUrgencyKey = (task: Task | TaskReview) => {
-    if ('urgency' in task) return task.urgency;
-    const value = task.urgencyName?.toLowerCase() ?? '';
-    if (value.includes('high') || value.includes('גבוה')) return 'high';
-    if (value.includes('medium') || value.includes('בינונית')) return 'medium';
-    return 'low';
-  };
+
 
   const getStatusKey = (task: Task | TaskReview) => {
     if ('status' in task) return task.status;
@@ -71,14 +79,15 @@ export default function GanttChart({
   const getHoursActual = (task: Task | TaskReview) =>
     'hoursActual' in task ? (task.hoursActual ?? 0) : ((task as TaskReview).hourReport ?? 0);
 
-  const getProjectName = (task: Task | TaskReview) =>
-    'project' in task ? task.project : ((task as TaskReview).projectName ?? '');
 
-  const getStageName = (task: Task | TaskReview) =>
-    'stage' in task ? task.stage : ((task as TaskReview).name ?? '');
-
-  const getSubjectName = (task: Task | TaskReview) =>
-    'subject' in task ? task.subject : (((task as TaskReview).subject) || (task as TaskReview).name || '');
+  const resolveTableColor = (tables: SystemTable[] | undefined, key: number | undefined) => {
+    if (!tables || key === undefined) return null;
+    const found=tables.find(t => t.id === key);
+    if (!found || !found.color) return null;
+    const c = found.color;
+    if (c.startsWith('bg-')) return { className: c, style: undefined } as const;
+    return { className: undefined, style: { backgroundColor: c } } as const;
+  };
 
   const employeeColorMap = useMemo(() => {
     const allEmployees = Array.from(
@@ -149,31 +158,78 @@ export default function GanttChart({
     });
   }, [currentDate, timeframe]);
 
-  const getTaskStyle = (task: Task | TaskReview) => {
-    const hoursInDay = 8;
-    const hours = getHoursEstimate(task);
+  const getVisibleRange = () => {
     if (timeframe === 'weekly') {
-      const w = (Math.ceil(hours / hoursInDay) / 5) * 100;
-      return { width: `${Math.min(w, 100)}%`, left: '0%' };
+      const ws = new Date(currentDate);
+      ws.setDate(currentDate.getDate() - currentDate.getDay());
+      const start = new Date(ws.getFullYear(), ws.getMonth(), ws.getDate());
+      const end = new Date(start);
+      end.setDate(start.getDate() + 4);
+      end.setHours(23, 59, 59, 999);
+      return { start, end };
     }
-    const w = (Math.ceil(hours / (hoursInDay * 5)) / 4) * 100;
-    return { width: `${Math.min(w, 100)}%`, left: '0%' };
+    const ms = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+    const start = new Date(ms.getFullYear(), ms.getMonth(), ms.getDate());
+    const end = new Date(start);
+    end.setDate(start.getDate() + (4 * 7 - 1));
+    end.setHours(23, 59, 59, 999);
+    return { start, end };
   };
 
-  const getTaskBarColor = (task: Task | TaskReview): string => {
+  const getTaskPosition = (task: Task | TaskReview) => {
+    const { start: rangeStart, end: rangeEnd } = getVisibleRange();
+    const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const endOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+
+    const normalizedRangeStart = startOfDay(rangeStart);
+    const normalizedRangeEnd = endOfDay(rangeEnd);
+    const sdRaw = (task as any).startDate ?? (task as any).start;
+    const edRaw = (task as any).endDate ?? (task as any).end;
+    const startDate = sdRaw ? new Date(sdRaw) : null;
+    const endDate = edRaw ? new Date(edRaw) : null;
+    let s = startOfDay(startDate ?? new Date((task as any).start || Date.now()));
+    let e = endOfDay(endDate ?? new Date((task as any).end || s));
+    if (e.getTime() < s.getTime()) {
+      const tmp = s;
+      s = e;
+      e = tmp;
+    }
+    if (!isFinite(normalizedRangeStart.getTime()) || !isFinite(normalizedRangeEnd.getTime())) return { display: 'none' } as React.CSSProperties;
+    if (e.getTime() < normalizedRangeStart.getTime() || s.getTime() > normalizedRangeEnd.getTime()) {
+      return { display: 'none' } as React.CSSProperties;
+    }
+    const clampedStart = new Date(Math.max(s.getTime(), normalizedRangeStart.getTime()));
+    const clampedEnd = new Date(Math.min(e.getTime(), normalizedRangeEnd.getTime()));
+    const total = normalizedRangeEnd.getTime() - normalizedRangeStart.getTime();
+    if (!isFinite(total) || total <= 0) return { display: 'none' } as React.CSSProperties;
+    let leftPct = ((clampedStart.getTime() - normalizedRangeStart.getTime()) / total) * 100;
+    if (!Number.isFinite(leftPct)) leftPct = 0;
+    const widthPct = ((clampedEnd.getTime() - clampedStart.getTime()) / total) * 100;
+    return { left: `${leftPct}%`, width: `${Math.max(widthPct, 2)}%`, minWidth: '24px' } as React.CSSProperties;
+  };
+
+  const getTaskBarColor = (task:  TaskReview) => {
     if (colorBy === 'employee') {
       const firstReceiver = getReceivers(task)[0];
       if (firstReceiver && employeeColorMap[firstReceiver]) {
-        return employeeColorMap[firstReceiver].bg;
+        return { className: employeeColorMap[firstReceiver].bg, style: undefined } as const;
       }
-      return 'bg-gray-400';
+      return { className: 'bg-gray-400', style: undefined } as const;
     }
     if (colorBy === 'urgency') {
-      const urgency = getUrgencyKey(task) as keyof typeof URGENCY_COLORS;
-      return URGENCY_COLORS[urgency]?.bg ?? URGENCY_COLORS.medium.bg;
+      const urgenyId=task.urgencyID;
+      const resolved = resolveTableColor(priorities, urgenyId);
+
+      // const urgencyKey = getUrgencyKey(task) as string | undefined;
+      // const resolved = resolveTableColor(priorities, urgencyKey);
+      if (resolved) return resolved;
+      return { className: 'bg-gray-400', style: undefined } as const;
     }
-    const status = getStatusKey(task) as keyof typeof STATUS_COLORS;
-    return STATUS_COLORS[status]?.bg ?? STATUS_COLORS.todo.bg;
+    
+ //   const statusKey = getStatusKey(task) as string | undefined;
+    const resolved = resolveTableColor(statuses, task.statuID);
+    if (resolved) return resolved;
+    return { className: 'bg-gray-400', style: undefined } as const;
   };
 
   const getUtilizationColor = (pct: number) => {
@@ -187,6 +243,13 @@ export default function GanttChart({
     const avg = total / timeSlots.length;
     return Math.min(Math.round((avg / 8) * 100), 100);
   };
+
+  const visibleTasks = useMemo(() => {
+    return tasks.filter(task => {
+      const pos = getTaskPosition(task);
+      return (pos as any).display !== 'none';
+    });
+  }, [tasks, currentDate, timeframe]);
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -222,9 +285,9 @@ export default function GanttChart({
               {timeSlots.map((slot, i) => (
                 <div key={i} className="bg-gray-50 px-2 py-3 border-l border-gray-200 text-center">
                   <div className="text-xs font-bold text-gray-700">{slot.label}</div>
-                  <div className={`text-xs font-semibold mt-1 ${getUtilizationColor(calculateSlotUtilization())}`}>
+                    <div  className={`text-xs font-semibold mt-1 ${getUtilizationColor(calculateSlotUtilization())} hidden`}>
                     {calculateSlotUtilization()}%
-                  </div>
+                    </div>
                 </div>
               ))}
             </div>
@@ -236,22 +299,32 @@ export default function GanttChart({
               <div className="py-12 text-center text-gray-500">אין משימות להצגה</div>
             ) : (
               tasks.map((task) => (
-                <div key={task.id} className="hover:bg-blue-50 transition-colors cursor-pointer" onClick={() => onTaskClick?.(task)}>
+                
+                <div key={task.id} onClick={() => setSelectedTask(task)} className="hover:bg-blue-50 transition-colors cursor-pointer">
                   <div className="relative py-3 px-2">
+                    {/* <div>{`${task.projectName} - ${task.name}\n${task.workHours}h`}</div> */}
                     <div className="grid h-full" style={{ gridTemplateColumns: `repeat(${timeSlots.length}, 1fr)` }}>
                       {timeSlots.map((_, i) => <div key={i} className="border-l border-gray-100" />)}
                     </div>
                     <div className="absolute top-0 left-0 right-0 bottom-0 px-2 py-3 pointer-events-none">
-                      <div className="relative h-full">
-                        <div
-                          className={`absolute top-0 h-full ${getTaskBarColor(task)} rounded-full shadow-md flex items-center px-3 hover:shadow-lg transition-all`}
-                          style={getTaskStyle(task)}
-                          title={`${getProjectName(task)} - ${getStageName(task)}\n${getSubjectName(task)}\n${getHoursEstimate(task)}h`}
-                        >
-                          <span className="text-white text-xs font-semibold truncate">
-                            {getProjectName(task)} - {getSubjectName(task)}
-                          </span>
-                        </div>
+                      <div className=" h-full">
+                        {
+                          (() => {
+                            const bar = getTaskBarColor(task);
+                              const pos = getTaskPosition(task);
+                              return (
+                                <div
+                                  className={`absolute top-0 h-full ${bar.className ?? ''} rounded-full shadow-md flex items-center px-3 hover:shadow-lg transition-all`}
+                                  style={{ ...(pos ?? {}), ...(bar.style ?? {}) }}
+                                  title={`${task.projectName} - ${task.subject}\n${getHoursEstimate(task)}h`}
+                                >
+                                <span className="text-gray text-xs font-semibold truncate">
+                                  {task.projectName} - {task.subject}
+                                </span>
+                              </div>
+                            );
+                          })()
+                        }
                       </div>
                     </div>
                   </div>
@@ -262,6 +335,22 @@ export default function GanttChart({
         </div>
       </div>
 
+      {selectedTask && (
+        <TaskCard
+          task={selectedTask}
+          onClose={() => setSelectedTask(null)}
+          onUpdate={(updatedTask, employeeLinks, options) => {
+            if (onUpdate) onUpdate(updatedTask, employeeLinks, options);
+            setSelectedTask(null);
+          }}
+          viewMode={currentView}
+          statuses={statuses}
+          priorities={priorities}
+          planStepListTask={taskCardStepContext.planStepListTask}
+          tasksInSameStep={taskCardStepContext.tasksInSameStep}
+        />
+      )}
+
       {/* Legend + Toggle */}
       <div className="bg-gray-50 px-6 py-3 border-t border-gray-200">
         <div className="flex items-center justify-between flex-wrap gap-4">
@@ -270,7 +359,7 @@ export default function GanttChart({
             <span className="text-sm font-semibold text-gray-700">צבע לפי:</span>
             <div className="flex items-center gap-1 bg-gray-200 rounded-lg p-1">
               <button
-                onClick={() => setColorBy('urgency')}
+                onClick={() =>{console.log('tasks', tasks); setColorBy('urgency')} }
                 className={`px-3 py-1 rounded-md text-xs font-bold transition-all ${colorBy === 'urgency' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600'}`}
               >
                 עדיפות
@@ -294,16 +383,24 @@ export default function GanttChart({
 
           {/* Legend items */}
           <div className="flex items-center gap-4 flex-wrap text-sm">
-            {colorBy === 'urgency' && Object.entries(URGENCY_COLORS).map(([k, v]) => (
-              <div key={k} className="flex items-center gap-1.5">
-                <div className={`w-3 h-3 ${v.bg} rounded`} />
-                <span className="text-gray-600 text-xs">{v.name}</span>
+            {colorBy === 'urgency' && priorities.map((p) => (
+              <div key={p.id} className="flex items-center gap-1.5">
+                {p.color && p.color.startsWith('bg-') ? (
+                  <div className={`w-3 h-3 ${p.color} rounded`} />
+                ) : (
+                  <div className="w-3 h-3 rounded" style={{ backgroundColor: p.color }} />
+                )}
+                <span className="text-gray-600 text-xs">{p.name}</span>
               </div>
             ))}
-            {colorBy === 'status' && Object.entries(STATUS_COLORS).map(([k, v]) => (
-              <div key={k} className="flex items-center gap-1.5">
-                <div className={`w-3 h-3 ${v.bg} rounded`} />
-                <span className="text-gray-600 text-xs">{v.name}</span>
+            {colorBy === 'status' && statuses.map((s) => (
+              <div key={s.id} className="flex items-center gap-1.5">
+                {s.color && s.color.startsWith('bg-') ? (
+                  <div className={`w-3 h-3 ${s.color} rounded`} />
+                ) : (
+                  <div className="w-3 h-3 rounded" style={{ backgroundColor: s.color }} />
+                )}
+                <span className="text-gray-600 text-xs">{s.name}</span>
               </div>
             ))}
             {colorBy === 'employee' && Object.entries(employeeColorMap).map(([emp, color]) => (
@@ -314,7 +411,7 @@ export default function GanttChart({
             ))}
           </div>
 
-          <div className="flex items-center gap-4 text-sm">
+          <div className=" items-center gap-4 text-sm hidden">
             <span className="font-semibold text-gray-700">ניצול:</span>
             <span className="text-emerald-600 font-semibold">≥80%</span>
             <span className="text-yellow-600 font-semibold">50-79%</span>
@@ -327,19 +424,19 @@ export default function GanttChart({
       <div className="bg-gradient-to-r from-blue-50 to-purple-50 px-6 py-4 border-t border-gray-200">
         <div className="grid grid-cols-4 gap-4">
           <div className="text-center">
-            <div className="text-2xl font-bold text-blue-600">{tasks.length}</div>
+            <div className="text-2xl font-bold text-blue-600">{visibleTasks.length}</div>
             <div className="text-xs text-gray-600">משימות</div>
           </div>
           <div className="text-center">
-            <div className="text-2xl font-bold text-emerald-600">{tasks.reduce((s, t) => s + getHoursEstimate(t), 0)}</div>
+            <div className="text-2xl font-bold text-emerald-600">{visibleTasks.reduce((s, t) => s + getHoursEstimate(t), 0)}</div>
             <div className="text-xs text-gray-600">שעות מתוכננות</div>
           </div>
           <div className="text-center">
-            <div className="text-2xl font-bold text-purple-600">{tasks.reduce((s, t) => s + getHoursActual(t), 0)}</div>
+            <div className="text-2xl font-bold text-purple-600">{visibleTasks.reduce((s, t) => s + getHoursActual(t), 0)}</div>
             <div className="text-xs text-gray-600">שעות בפועל</div>
           </div>
           <div className="text-center">
-            <div className="text-2xl font-bold text-yellow-600">{tasks.filter(t => getStatusKey(t) === 'done').length}</div>
+            <div className="text-2xl font-bold text-yellow-600">{visibleTasks.filter(t => getStatusKey(t) === 'done').length}</div>
             <div className="text-xs text-gray-600">הושלמו</div>
           </div>
         </div>

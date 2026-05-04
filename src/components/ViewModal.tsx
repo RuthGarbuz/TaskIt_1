@@ -4,16 +4,19 @@ interface ViewModalProps {
   activeView: 'all' | 'status' | 'urgency' | 'project' | 'date';
   onViewChange: (view: 'all' | 'status' | 'urgency' | 'project' | 'date') => void;
   onClose: () => void;
+  hideUrgencyOption?: boolean;
 }
 
-export default function ViewModal({ activeView, onViewChange, onClose }: ViewModalProps) {
-  const views = [
+export default function ViewModal({ activeView, onViewChange, onClose, hideUrgencyOption = false }: ViewModalProps) {
+  const allViews: Array<{ value: ViewModalProps['activeView']; label: string }> = [
     { value: 'all', label: 'הצג הכל' },
     { value: 'status', label: 'קבץ לפי סטטוס' },
-    { value: 'urgency', label: 'קבץ לפי דחיפות' },
+    { value: 'urgency', label: 'קבץ לפי עדיפות' },
     { value: 'project', label: 'קבץ לפי פרויקט' },
     { value: 'date', label: 'קבץ לפי תאריך' },
-  ] as const;
+  ];
+
+  const views = allViews.filter((view) => !(hideUrgencyOption && view.value === 'urgency'));
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">

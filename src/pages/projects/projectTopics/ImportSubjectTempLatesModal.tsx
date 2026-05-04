@@ -129,20 +129,25 @@ import type { SubjectTemplate } from '../../../Data/projectsData';
 
     //const CATEGORIES = ['הכל', ...Array.from(new Set(TEMPLATES.map(t => t.category)))];
 
+const todayIso = () => new Date().toISOString().split('T')[0];
+
 // ─── Template Card ────────────────────────────────────────────────────────────
 function TemplateCard({
-  template, selected, expanded, onToggleSelect, onToggleExpand,
+  template, selected, expanded, importStartDate, onImportStartDateChange,
+  onToggleSelect, onToggleExpand,
 }: {
   template: SubjectTemplate;
   selected: boolean;
   expanded: boolean;
+  importStartDate: string;
+  onImportStartDateChange: (iso: string) => void;
   onToggleSelect: () => void;
   onToggleExpand: () => void;
 }) {
   return (
     <div className={`rounded-xl border-2 transition-all ${selected ? 'border-emerald-400 bg-emerald-50' : 'border-gray-200 bg-white hover:border-gray-300'}`}>
-      {/* Card header */}
-      <div className="flex items-center gap-3 px-4 py-3">
+      {/* Card header — dir rtl: last column sits visually on the left */}
+      <div className="flex items-center gap-3 px-4 py-3" dir="rtl">
         {/* Checkbox */}
         <input
           type="checkbox"
@@ -168,15 +173,31 @@ function TemplateCard({
             <span>{template.totalDays} ימים</span>
           </div>
         </div>
-
+ {selected && (
+          <div
+            className="shrink-0 flex flex-col gap-0.5 min-w-[9.5rem]"
+            onClick={e => e.stopPropagation()}
+          >
+            <label className="text-[10px] font-semibold text-gray-600 whitespace-nowrap">תאריך התחלה</label>
+            <input
+              type="date"
+              value={importStartDate}
+              onChange={e => onImportStartDateChange(e.target.value)}
+              className="w-full text-xs border border-gray-300 rounded-md px-1.5 py-1 bg-white focus:ring-2 focus:ring-emerald-400 focus:border-emerald-500"
+            />
+          </div>
+        )}
         {/* Expand toggle */}
         <button
           onClick={onToggleExpand}
           className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-400 shrink-0 transition-colors"
           title="הצג שלבים"
         >
+          
           {expanded ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}
         </button>
+
+       
       </div>
 
       {/* Expanded steps preview */}
@@ -205,8 +226,13 @@ function TemplateCard({
 }
 
 // ─── Main Modal ───────────────────────────────────────────────────────────────
+export type ImportPlanningSubjectsPayload = {
+  templates: SubjectTemplate[];
+  startDateByTemplateId: Record<number, string>;
+};
+
 interface ImportSubjectTemplatesModalProps {
-  onImport: (templates: SubjectTemplate[]) => void;
+  onImport: (payload: ImportPlanningSubjectsPayload) => void;
   onClose: () => void;
   projectId: number;
 }
@@ -216,6 +242,8 @@ export default function ImportSubjectTemplatesModal({ onImport, onClose, project
   const [activeCategory, setActiveCategory] = useState('הכל');
   const [selectedIds, setSelectedIds]   = useState<number[]>([]);
   const [expandedIds, setExpandedIds]   = useState<number[]>([]);
+  const [startDateByTemplateId, setStartDateByTemplateId] = useState<Record<number, string>>({});
+  const [importBlockMsg, setImportBlockMsg] = useState('');
   const [templates, setTemplates] = useState<SubjectTemplate[]>([]);
 
   useEffect(() => {
@@ -258,14 +286,57 @@ export default function ImportSubjectTemplatesModal({ onImport, onClose, project
     [search, activeCategory, templates]
   );
 
-  const toggleSelect  = (id: number) => setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const toggleSelect = (id: number) => {
+    setImportBlockMsg('');
+    setSelectedIds(prev => {
+      const adding = !prev.includes(id);
+      setStartDateByTemplateId(d => {
+        if (adding) return d[id] ? d : { ...d, [id]: todayIso() };
+        const { [id]: _removed, ...rest } = d;
+        return rest;
+      });
+      return adding ? [...prev, id] : prev.filter(x => x !== id);
+    });
+  };
   const toggleExpand  = (id: number) => setExpandedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-  const selectAll     = () => setSelectedIds(filtered.map(t => t.id));
-  const clearAll      = () => setSelectedIds([]);
+  const selectAll     = () => {
+    setImportBlockMsg('');
+    const ids = filtered.map(t => t.id);
+    setSelectedIds(ids);
+    setStartDateByTemplateId(prev => {
+      const next = { ...prev };
+      const st = todayIso();
+      for (const id of ids) {
+        if (!next[id]) next[id] = st;
+      }
+      return next;
+    });
+  };
+  const clearAll      = () => {
+    setImportBlockMsg('');
+    setSelectedIds([]);
+    setStartDateByTemplateId({});
+  };
+
+  const setTemplateStartDate = (id: number, iso: string) => {
+    setImportBlockMsg('');
+    setStartDateByTemplateId(prev => ({ ...prev, [id]: iso }));
+  };
 
   const handleImport  = () => {
+    setImportBlockMsg('');
     const toImport = (templates ?? []).filter(t => selectedIds.includes(t.id));
-    onImport(toImport);
+    if (!toImport.length) return;
+    for (const t of toImport) {
+      const d = startDateByTemplateId[t.id];
+      if (!d?.trim()) {
+        setImportBlockMsg('נא לבחור תאריך התחלה לכל תבנית שנבחרה.');
+        return;
+      }
+    }
+    const startDateByTemplateIdSlice: Record<number, string> = {};
+    for (const t of toImport) startDateByTemplateIdSlice[t.id] = startDateByTemplateId[t.id]!;
+    onImport({ templates: toImport, startDateByTemplateId: startDateByTemplateIdSlice });
     onClose();
   };
 
@@ -341,12 +412,20 @@ export default function ImportSubjectTemplatesModal({ onImport, onClose, project
                 template={template}
                 selected={selectedIds.includes(template.id)}
                 expanded={expandedIds.includes(template.id)}
+                importStartDate={startDateByTemplateId[template.id] ?? ''}
+                onImportStartDateChange={iso => setTemplateStartDate(template.id, iso)}
                 onToggleSelect={() => toggleSelect(template.id)}
                 onToggleExpand={() => toggleExpand(template.id)}
               />
             ))
           )}
         </div>
+
+        {importBlockMsg && (
+          <div className="flex-shrink-0 px-6 pt-2 text-xs text-red-600 font-medium" dir="rtl">
+            {importBlockMsg}
+          </div>
+        )}
 
         {/* Footer */}
         <div className="flex-shrink-0 border-t border-gray-200 px-6 py-4 flex gap-3 bg-white rounded-b-2xl">

@@ -54,3 +54,13 @@ export const getAvatarColor = (name: string) => {
   const colors = ['bg-blue-500', 'bg-green-500', 'bg-purple-500', 'bg-pink-500'];
   return colors[name.charCodeAt(0) % colors.length];
 };
+
+export interface DBFilters {
+  dateFrom: string;       // '' = no limit
+  dateTo: string;         // default: 1 month from today
+  closedTasks: 'all' | 'yes' | 'no';  // default: 'no'
+  status: number[];       // default: [] (all)
+  urgency: number[];      // default: [] (all)
+  senders: number[];      // default: []  (all)
+  projects: number[];     // default: []  (all)
+}

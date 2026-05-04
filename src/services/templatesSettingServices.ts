@@ -13,6 +13,15 @@ export interface EmployeeBasic {
   name: string;
 }
 
+/**
+ * Matches server `DeleteRequest`: `Id` is bound from the route; `Database` from query (`database`).
+ * Adjust the path if your controller uses a different route template.
+ */
+export interface DeletePlanningSubjectTemplateRequest {
+  database: string;
+  id: number;
+}
+
 
 
 const getAuthenticatedUser = () => {
@@ -92,8 +101,6 @@ export const getEmployees = async (): Promise<EmployeeBasic[]> => {
   }
 };
 
-
-
 const dedupeNumbers = (items: number[]): number[] => Array.from(new Set(items.filter((n) => n > 0)));
 
 const subjectHasChanges = (subject: PlanningSubjectTemplate): boolean => {
@@ -152,7 +159,7 @@ const buildSubjectRequest = (subject: PlanningSubjectTemplate): SavePlanningSubj
           taskDuration: task.taskDuration,
           isActive: task.isActive,
           orderNum: task.orderNum,
-          dependsOnTaskId: task.dependsOnTaskId ?? null,
+          dependsOnTaskId: task.dependsOnTaskId??false ,
           employees: task.employees
             .filter(e => !e.isDeleted)
             .map(e => ({
@@ -178,7 +185,7 @@ const buildSubjectRequest = (subject: PlanningSubjectTemplate): SavePlanningSubj
         stepDuration: stage.stepDuration,
         isActive: stage.isActive,
         orderNum: stage.orderNum,
-        dependsOnStepId: stage.dependsOnStepId ?? null,
+        dependsOnStepId: stage.dependsOnStepId??false ,
         employees,
         deletedEmployeeIds,
         tasks,
@@ -187,26 +194,29 @@ const buildSubjectRequest = (subject: PlanningSubjectTemplate): SavePlanningSubj
     });
 
   return {
-    id: subject.id||undefined,
+    id: subject.id > 0 ? subject.id : null,
     name: subject.name,
     isActive: subject.isActive,
     stages,
-    deletedStageIds
+    deletedStageIds,
   };
 };
 
 export const PlanningTemplates = async (subjects: PlanningSubjectTemplate[]): Promise<SavePlanningSubjectResult[]> => {
   try {
     const user = getAuthenticatedUser();
-    const subjectsToSave = subjects.filter(subjectHasChanges);
+    // Include subjects marked deleted (persisted deletes) so they stay in the `subjects` list sent to the API.
+    const subjectsToSave = subjects.filter(
+      s => subjectHasChanges(s) && !(s.isNew === true && s.isDeleted === true),
+    );
     if (subjectsToSave.length === 0) {
       return [];
     }
 
-    const requestBody ={
+    const requestBody = {
       database: user.dataBase,
-      subjects: subjectsToSave.map(subject => buildSubjectRequest(subject))
-    } 
+      subjects: subjectsToSave.map(subject => buildSubjectRequest(subject)),
+    };
     const endpoint = buildEndpoint(user.urlConnection, "/TemplatesSettings/SavePlanningSubject");
     const response = await authService.makeAuthenticatedRequest(
       endpoint,
@@ -224,5 +234,43 @@ export const PlanningTemplates = async (subjects: PlanningSubjectTemplate[]): Pr
   }
 };
 
-
+/**
+ * Deletes a planning subject template on the server (`[HttpDelete("{id:int}")] Delete` → `DeleteSubjectAsync`).
+ * Expects a persisted id (positive DB id). Sends `DELETE /TemplatesSettings/{id}?database=...` (204 No Content on success).
+ */
+export const deletePlanningSubjectTemplate = async (id: number): Promise<void> => {
+  if (!Number.isFinite(id) || id <= 0) {
+    throw new Error('Invalid planning subject template id for delete');
+  }
+  try {
+    const user = getAuthenticatedUser();
+   
+    const endpoint = buildEndpoint(
+          user.urlConnection,
+          "/TemplatesSettings/DeleteSubject",
+    );
+    const response = await authService.makeAuthenticatedRequest(endpoint, {
+      method: 'POST',
+      body: JSON.stringify({
+        database: user.dataBase,
+        id,
+      }),
+    });
+    if (!response.ok) {
+      let detail = '';
+      try {
+        const errJson = await response.json();
+        detail = typeof errJson?.error === 'string' ? errJson.error : JSON.stringify(errJson);
+      } catch {
+        detail = await response.text().catch(() => '');
+      }
+      throw new Error(
+        `Failed to delete planning subject template: ${response.statusText}${detail ? ` — ${detail}` : ''}`.trim(),
+      );
+    }
+  } catch (error) {
+    console.error('Error deleting planning subject template:', error);
+    throw error;
+  }
+};
 

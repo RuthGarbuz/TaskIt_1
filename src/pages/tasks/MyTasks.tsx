@@ -1,19 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Clock, AlertCircle, Eye, MessageSquare, Send, Paperclip, Link as LinkIcon, Smile, Image as ImageIcon } from 'lucide-react';
+import { Clock, AlertCircle, Eye, MessageSquare, Send, Filter, X, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
 import { useTaskFilters } from '../../hooks/useTaskFilters';
 import { useTaskGrouping } from '../../hooks/useTaskGrouping';
 import TaskControls from './TaskControls';
 import TaskCard from './TaskCard';
 import ViewModal from '../../components/ViewModal';
-import FilterModal from '../../components/FilterModal';
-import { getUrgencyColor } from '../../Data/tasksData';
 import GanttChart from './GanttChart';
-import type { HoursReport } from '../hoursReport/HoursReportModal';
 import HoursReportModal from '../hoursReport/HoursReportModal';
-import type { SystemTable, TaskReview } from '../../Data/projectsData';
-import { getTaskPriorities, getTaskStatuses, updateStatusAsync, getMyTasks } from '../../services/taskService';
-import ChatModal from './ChatModal';
+import type { EmployeeLink, SystemTable, TaskReview, TaskCardSaveOptions, TaskUpdatePatch } from '../../Data/projectsData';
+import { getTaskPriorities, getTaskStatuses, updateStatusAsync, getMyTasks, updateIsClosedAsync, updateTaskAsync } from '../../services/taskService';
+import ChatModal from '../tasks/ChatModal';
 import authService from '../../services/authService';
+import type { HoursReport } from '../../Data/HoursReportData';
+import type { DBFilters } from '../../Data/tasksData';
+import DateFilter from '../shared/DateFilter';
+import SearchableCheckboxFilter from '../shared/SearchableCheckboxFilter';
+import DbFilterModal, { getDefaultDBFilters } from './DbFilterModal';
+import { usePersistedDbFilters } from '../../hooks/usePersistedDbFilters';
+import MyTasksReportModal, { type ReportColumn } from './MyTasksReportModal';
 
 interface MyTasksProps {
   tasks: TaskReview[];
@@ -22,502 +26,1106 @@ interface MyTasksProps {
 }
 
 type StatusKey = 'todo' | 'inProgress' | 'done';
+type ColumnFilterKey = 'isClosed' | 'project' | 'status' | 'urgency' | 'sender' | 'startDate' | 'endDate';
 
-interface ChatMessage {
-  id: number;
-  user: string;
-  avatar: string;
-  message: string;
-  timestamp: string;
-  mentions?: string[];
+type SortKey = 'subject' | 'name' | 'planningSubjectName' | 'projectName' | 'statusName' | 'urgencyName' | 'senderName' | 'startDate' | 'endDate' | 'workHours' | 'utilizationPercentage';
+type SortDir = 'asc' | 'desc' | null;
+interface SortState { key: SortKey | null; dir: SortDir; }
+const truncateTo18 = (value?: string) => {
+  const text = (value ?? '').trim();
+  return text.length > 18 ? `${text.slice(0, 18)}...` : text;
+};
+
+const MY_TASKS_REPORT_COLUMNS: ReportColumn[] = [
+  { key: 'isClosed', label: 'נבדק', widthPx: 60, widthChars: 8, align: 'center' },
+  { key: 'subject', label: 'תיאור משימה', widthPx: 220, widthChars: 30 },
+  { key: 'hasChat', label: 'Chat', widthPx: 60, widthChars: 8, align: 'center' },
+  { key: 'stageName', label: 'שלב', widthPx: 150, widthChars: 22 },
+  { key: 'planningSubject', label: 'נושא תכנון', widthPx: 160, widthChars: 24 },
+  { key: 'project', label: 'פרויקט', widthPx: 170, widthChars: 24 },
+  { key: 'status', label: 'סטטוס', widthPx: 110, widthChars: 14 },
+  { key: 'urgency', label: 'עדיפות', widthPx: 95, widthChars: 12 },
+  { key: 'sender', label: 'שולח', widthPx: 110, widthChars: 16 },
+  { key: 'startDate', label: 'תאריך התחלה', widthPx: 100, widthChars: 12, align: 'center' },
+  { key: 'endDate', label: 'תאריך סיום', widthPx: 100, widthChars: 12, align: 'center' },
+  { key: 'dependsOnStep', label: 'תלוי שלב/משימה', widthPx: 130, widthChars: 16, align: 'center' },
+  { key: 'workHoursBudget', label: 'תקצוב שעות', widthPx: 150, widthChars: 20 },
+  { key: 'utilization', label: 'אחוז ניצול', widthPx: 100, widthChars: 14, align: 'center' },
+  { key: 'hoursReported', label: 'דיווח שעות', widthPx: 100, widthChars: 14, align: 'center' },
+  { key: 'invoiceIndicator', label: 'אינדקציה לחשבון', widthPx: 120, widthChars: 16, hideInPrint: true, align: 'center' }
+];
+
+function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
+  if (!active || !dir) return <ChevronsUpDown size={11} className="text-gray-400" />;
+  return dir === 'asc' ? <ChevronUp size={11} className="text-emerald-600" /> : <ChevronDown size={11} className="text-emerald-600" />;
+}
+
+function SortableTh({ sortKey, label, className, sort, onSort }: {
+  sortKey: SortKey; label: string; className: string; sort: SortState; onSort: (k: SortKey) => void;
+}) {
+  return (
+    <th className={`${className} cursor-pointer select-none hover:bg-gray-100 transition-colors`} onClick={() => onSort(sortKey)}>
+      <div className="flex items-center gap-1">
+        <span>{label}</span>
+        <SortIcon active={sort.key === sortKey} dir={sort.key === sortKey ? sort.dir : null} />
+      </div>
+    </th>
+  );
 }
 
 export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksProps) {
   const [viewMode, setViewMode] = useState<'list' | 'gantt'>('list');
-  const [ganttTimeframe, setGanttTimeframe] = useState< 'weekly' | 'monthly'>('weekly');
+  const [ganttTimeframe, setGanttTimeframe] = useState<'weekly' | 'monthly'>('weekly');
+  const [ganttTask, setGanttTask] = useState<TaskReview[]>([]);
   const [showViewModal, setShowViewModal] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
+  const [dbFilters, setDbFilters] = usePersistedDbFilters('taskit.dbFilters.myTasks', getDefaultDBFilters);
   const [activeView, setActiveView] = useState<'all' | 'status' | 'urgency' | 'project' | 'date'>('all');
   const [selectedTask, setSelectedTask] = useState<TaskReview | null>(null);
-  const [projectSearchQuery, setProjectSearchQuery] = useState('');
   const [showChatModal, setShowChatModal] = useState(false);
   const [chatTask, setChatTask] = useState<TaskReview | null>(null);
-
-  const [hoveredTaskId, setHoveredTaskId] = useState<number | null>(null);
   const [showHoursModal, setShowHoursModal] = useState(false);
   const [hoursTask, setHoursTask] = useState<TaskReview | null>(null);
   const [statuses, setStatuses] = useState<SystemTable[]>([]);
   const [priorities, setPriorities] = useState<SystemTable[]>([]);
+  const [openColumnFilter, setOpenColumnFilter] = useState<ColumnFilterKey | null>(null);
+  const [columnFilterSearch, setColumnFilterSearch] = useState({ project: '', status: '', urgency: '', sender: '' });
+  const [columnFilters, setColumnFilters] = useState({
+    closedStates: [] as string[],
+    projects: [] as string[], statuses: [] as number[], urgencies: [] as string[],
+    senders: [] as string[], startDateFrom: '', startDateTo: '', endDateFrom: '', endDateTo: '',
+  });
+  const [showReportModal, setShowReportModal] = useState(false);
 
+  const [sort, setSort] = useState<SortState>({ key: null, dir: null });
 
-const userId = authService.getCurrentUser()?.id ?? 0;
+  const handleSort = (key: SortKey) => {
+    setSort(prev => {
+      if (prev.key !== key) return { key, dir: 'asc' };
+      if (prev.dir === 'asc') return { key, dir: 'desc' };
+      return { key: null, dir: null };
+    });
+  };
+
+  const userId = authService.getCurrentUser()?.id ?? 0;
 
   const statusKeyFromName = (statusName: string): StatusKey => {
     const value = statusName.toLowerCase();
-    if (value.includes('done') || value.includes('הושלם') || value.includes('סגור')) return 'done' as const;
-    if (value.includes('progress') || value.includes('בביצוע')) return 'inProgress' as const;
-    return 'todo' as const;
+    if (value.includes('done') || value.includes('הושלם') || value.includes('סגור')) return 'done';
+    if (value.includes('progress') || value.includes('בביצוע')) return 'inProgress';
+    return 'todo';
   };
 
+  const statusOptions = useMemo(() => statuses.map(s => ({ id: s.id, name: s.name })), [statuses]);
+  const { searchQuery, setSearchQuery, filteredTasks, activeFiltersCount } = useTaskFilters(tasks, 'myTasks', '');
 
+  const toggleArrayFilter = <T,>(items: T[], value: T) =>
+    items.includes(value) ? items.filter(i => i !== value) : [...items, value];
 
-  // const urgencyKeyFromName = (urgencyName: string): UrgencyKey => {
-  //   const value = urgencyName.toLowerCase();
-  //   if (value.includes('high') || value.includes('גבוה')) return 'high' as const;
-  //   if (value.includes('medium') || value.includes('בינונית')) return 'medium' as const;
-  //   return 'low' as const;
-  // };
+  const toComparableDate = (value?: string | null) => {
+    if (!value) return '';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return '';
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
 
+  const matchesDateRange = (value: string | undefined | null, from: string, to: string) => {
+    const d = toComparableDate(value);
+    if (!d) return !from && !to;
+    if (from && d < from) return false;
+    if (to && d > to) return false;
+    return true;
+  };
 
-  const statusOptions = useMemo(
-    () => statuses.map((status) => ({
-      id: status.id,
-      name: status.name
-    })),
-    [statuses]
+  const projectFilterOptions = useMemo(() =>
+    Array.from(new Set(tasks.map(t => t.projectName).filter(Boolean)))
+      .sort((a, b) => a.localeCompare(b, 'he'))
+      .map(p => ({ value: p, label: p })), [tasks]);
+
+  const senderFilterOptions = useMemo(() =>
+    Array.from(new Set(tasks.map(t => t.senderName).filter(Boolean)))
+      .sort((a, b) => a.localeCompare(b, 'he'))
+      .map(s => ({ value: s, label: s })), [tasks]);
+
+  const urgencyFilterOptions = useMemo(() =>
+    Array.from(new Set(tasks.map(t => t.urgencyName).filter(Boolean)))
+      .sort((a, b) => a.localeCompare(b, 'he'))
+      .map(u => ({ value: u, label: u })), [tasks]);
+
+  const statusFilterOptions = useMemo(() => {
+    const map = new Map<number, string>();
+    tasks.forEach(t => {
+      const id = t.statuID ?? 0;
+      const name = t.statusName || statuses.find(s => s.id === id)?.name || `סטטוס ${id}`;
+      if (!map.has(id)) map.set(id, name);
+    });
+    return Array.from(map, ([id, name]) => ({ value: id, label: name }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'he'));
+  }, [tasks, statuses]);
+
+  const closedStateOptions = useMemo(() => [
+    { value: 'open', label: 'פתוח' },
+    { value: 'closed', label: 'סגור' },
+  ], []);
+
+  const columnFilteredTasks = useMemo(() =>
+    filteredTasks.filter(task => {
+      const closedState = task.isClosed ? 'closed' : 'open';
+      return (
+        (columnFilters.closedStates.length === 0 || columnFilters.closedStates.includes(closedState)) &&
+        (columnFilters.projects.length === 0 || columnFilters.projects.includes(task.projectName)) &&
+        (columnFilters.statuses.length === 0 || columnFilters.statuses.includes(task.statuID ?? 0)) &&
+        (columnFilters.urgencies.length === 0 || columnFilters.urgencies.includes(task.urgencyName)) &&
+        (columnFilters.senders.length === 0 || columnFilters.senders.includes(task.senderName)) &&
+        matchesDateRange(task.startDate, columnFilters.startDateFrom, columnFilters.startDateTo) &&
+        matchesDateRange(task.endDate, columnFilters.endDateFrom, columnFilters.endDateTo)
+      );
+    }), [filteredTasks, columnFilters]);
+
+  const sortTasks = (taskList: TaskReview[]) => {
+    if (!sort.key || !sort.dir) return taskList;
+    return [...taskList].sort((a, b) => {
+      const key = sort.key!;
+      let aVal: string | number = '';
+      let bVal: string | number = '';
+      if (key === 'startDate') { aVal = toComparableDate(a.startDate) ?? ''; bVal = toComparableDate(b.startDate) ?? ''; }
+      else if (key === 'endDate') { aVal = toComparableDate(a.endDate) ?? ''; bVal = toComparableDate(b.endDate) ?? ''; }
+      else if (key === 'workHours') { aVal = a.workHours ?? 0; bVal = b.workHours ?? 0; }
+      else if (key === 'utilizationPercentage') { aVal = a.utilizationPercentage ?? 0; bVal = b.utilizationPercentage ?? 0; }
+      else { aVal = (a[key as keyof TaskReview] as string | null | undefined) ?? ''; bVal = (b[key as keyof TaskReview] as string | null | undefined) ?? ''; }
+      if (typeof aVal === 'number' && typeof bVal === 'number')
+        return sort.dir === 'asc' ? aVal - bVal : bVal - aVal;
+      const cmp = String(aVal).localeCompare(String(bVal), 'he', { sensitivity: 'base' });
+      return sort.dir === 'asc' ? cmp : -cmp;
+    });
+  };
+
+  const groupedTasks = useTaskGrouping(columnFilteredTasks, activeView);
+
+  const columnFilterCount =
+    columnFilters.closedStates.length +
+    columnFilters.projects.length + columnFilters.statuses.length +
+    columnFilters.urgencies.length + columnFilters.senders.length +
+    (columnFilters.startDateFrom ? 1 : 0) + (columnFilters.startDateTo ? 1 : 0) +
+    (columnFilters.endDateFrom ? 1 : 0) + (columnFilters.endDateTo ? 1 : 0);
+
+  const isColumnFilterActive = (filterKey: ColumnFilterKey) => {
+    switch (filterKey) {
+      case 'isClosed':  return columnFilters.closedStates.length > 0;
+      case 'project':   return columnFilters.projects.length > 0;
+      case 'status':    return columnFilters.statuses.length > 0;
+      case 'sender':    return columnFilters.senders.length > 0;
+      case 'urgency':   return columnFilters.urgencies.length > 0;
+      case 'startDate': return Boolean(columnFilters.startDateFrom || columnFilters.startDateTo);
+      case 'endDate':   return Boolean(columnFilters.endDateFrom || columnFilters.endDateTo);
+      default: return false;
+    }
+  };
+  const formatDateCell = (value?: string | null) => (value ? new Date(value).toLocaleDateString('en-GB') : '-');
+
+  const getReportRows = () =>
+    columnFilteredTasks.map((task) => {
+      const util = task.utilizationPercentage ?? 0;
+      const utilStr = util % 1 !== 0 ? util.toFixed(2) : String(Math.round(util));
+      const reported = task.hourReport ?? 0;
+      const workBudget =
+        reported > 0
+          ? `${task.workHours ?? 0}h (${reported}h בפועל)`
+          : `${task.workHours ?? 0}h`;
+      return {
+        isClosed: task.isClosed ? 'כן' : 'לא',
+        subject: task.subject ?? '',
+        hasChat: task.hasChat ? 'כן' : 'לא',
+        stageName: task.name ?? '',
+        planningSubject: task.planningSubjectName ?? '',
+        project: task.projectName ?? '',
+        status: task.statusName ?? '',
+        urgency: task.urgencyName ?? '',
+        sender: task.senderName ?? '',
+        startDate: formatDateCell(task.startDate),
+        endDate: formatDateCell(task.endDate),
+        dependsOnStep: task.dependsOnStepID ? 'כן' : 'לא',
+        workHoursBudget: workBudget,
+        utilization: `${utilStr}%`,
+        hoursReported: reported > 0 ? String(reported) : '-',
+        invoiceIndicator: '—'
+      };
+    });
+
+  const downloadFile = (content: string, mimeType: string, extension: string) => {
+    const datePart = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `my-tasks-report-${datePart}.${extension}`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportJson = () => {
+    const content = JSON.stringify(getReportRows(), null, 2);
+    downloadFile(content, 'application/json;charset=utf-8;', 'json');
+  };
+
+  const handleCopySummary = async () => {
+    const closedCount = columnFilteredTasks.filter((task) => task.isClosed).length;
+    const openCount = columnFilteredTasks.length - closedCount;
+    const summary = `דוח משימות\nסה"כ: ${columnFilteredTasks.length}\nפתוחות: ${openCount}\nסגורות: ${closedCount}`;
+    try {
+      await navigator.clipboard.writeText(summary);
+      alert('סיכום הדוח הועתק ללוח.');
+    } catch {
+      alert(summary);
+    }
+  };
+
+  const handleOpenReportMenu = () => {
+    setOpenColumnFilter(null);
+    setShowReportModal(true);
+  };
+  const renderHeaderFilter = ({
+    filterKey, label, headerClassName, contentClassName = 'w-72',
+    align = 'right', sortKey, children,
+  }: {
+    filterKey: ColumnFilterKey; label: string; headerClassName: string;
+    contentClassName?: string; align?: 'right' | 'center';
+    sortKey?: SortKey; children: React.ReactNode;
+  }) => (
+    <th
+      className={`${headerClassName} relative ${sortKey ? 'cursor-pointer hover:bg-gray-100' : ''}`}
+      onClick={sortKey ? () => handleSort(sortKey) : undefined}
+    >
+      <div className={`flex items-center gap-1 ${align === 'center' ? 'justify-center' : 'justify-between'}`}>
+        <div className="flex items-center gap-1">
+          <span>{label}</span>
+          {sortKey && <SortIcon active={sort.key === sortKey} dir={sort.key === sortKey ? sort.dir : null} />}
+        </div>
+        <button
+          type="button"
+          onClick={e => { e.stopPropagation(); setOpenColumnFilter(current => current === filterKey ? null : filterKey); }}
+          className={`p-1 rounded-md border transition-colors ${
+            isColumnFilterActive(filterKey)
+              ? 'bg-emerald-100 text-emerald-700 border-emerald-300'
+              : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-100'
+          }`}
+          title={`סינון ${label}`}
+        >
+          <Filter size={12} />
+        </button>
+      </div>
+      {openColumnFilter === filterKey && (
+        <div
+          className={`absolute mt-2 z-[9999] ${contentClassName} rounded-xl border border-gray-200 bg-white shadow-xl p-3`}
+          style={{ top: '100%' }}
+          onClick={e => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-sm font-semibold text-gray-800">סינון {label}</span>
+            <button type="button" onClick={() => setOpenColumnFilter(null)} className="p-1 rounded-md text-gray-500 hover:bg-gray-100">
+              <X size={14} />
+            </button>
+          </div>
+          {children}
+        </div>
+      )}
+    </th>
   );
 
-  const {
-    searchQuery,
-    setSearchQuery,
-    filters,
-    setFilters,
-    toggleFilter,
-    clearFilters,
-    filteredTasks,
-    baseTasks,
-    activeFiltersCount,
-  } = useTaskFilters(tasks, 'myTasks', '');
+  const loadTasks = async (isMounted: boolean, filters?: DBFilters) => {
+    try {
+      const data = await getMyTasks(
+        filters?.dateFrom || null, filters?.dateTo || null,
+        filters?.closedTasks === 'yes' ? true : filters?.closedTasks === 'no' ? false : undefined,
+        {
+          statusIds: filters?.status.length ? filters.status : undefined,
+          priorityIds: filters?.urgency.length ? filters.urgency : undefined,
+          projectIds: filters?.projects.length ? filters.projects : undefined,
+          employeeIds: filters?.senders.length ? filters.senders : undefined,
+        }
+      );
+      if (isMounted) onTasksUpdate(data ?? []);
+    } catch (error) { console.error('Error loading my tasks:', error); }
+  };
 
-  const groupedTasks = useTaskGrouping(filteredTasks, activeView);
+  const loadGanttTasks = async (isMounted: boolean, filters?: DBFilters) => {
+    try {
+      const data = await getMyTasks(null, null,
+        filters?.closedTasks === 'yes' ? true : filters?.closedTasks === 'no' ? false : undefined,
+        {
+          statusIds: filters?.status.length ? filters.status : undefined,
+          priorityIds: filters?.urgency.length ? filters.urgency : undefined,
+          projectIds: filters?.projects.length ? filters.projects : undefined,
+          employeeIds: filters?.senders.length ? filters.senders : undefined,
+        }
+      );
+      if (isMounted) setGanttTask(data ?? []);
+    } catch (error) { console.error('Error loading gantt tasks:', error); if (isMounted) setGanttTask([]); }
+  };
 
   useEffect(() => {
     let isMounted = true;
-
-    const loadTasks = async () => {
-      try {
-        const data = await getMyTasks(null, null);
-        if (isMounted) onTasksUpdate(data ?? []);
-      } catch (error) {
-        console.error('Error loading my tasks:', error);
-      }
-    };
-
     const loadStatuses = async () => {
-      try {
-        const data = await getTaskStatuses();
-        if (isMounted) setStatuses(data ?? []);
-      } catch (error) {
-        console.error('Error loading task statuses:', error);
-        if (isMounted) setStatuses([]);
-      }
+      try { const data = await getTaskStatuses(); if (isMounted) setStatuses(data ?? []); }
+      catch { if (isMounted) setStatuses([]); }
     };
-
     const loadPriorities = async () => {
-      try {
-        const data = await getTaskPriorities();
-        if (isMounted) setPriorities(data ?? []);
-      } catch (error) {
-        console.error('Error loading task priorities:', error);
-        if (isMounted) setPriorities([]);
-      }
+      try { const data = await getTaskPriorities(); if (isMounted) setPriorities(data ?? []); }
+      catch { if (isMounted) setPriorities([]); }
     };
-
-    loadTasks();
+    loadTasks(isMounted, dbFilters);
     loadStatuses();
     loadPriorities();
+    const intervalId = window.setInterval(() => loadTasks(true, dbFilters), 30000);
+    return () => { isMounted = false; window.clearInterval(intervalId); };
+  }, [onTasksUpdate, dbFilters]);
 
-    const intervalId = window.setInterval(loadTasks, 30000);
-
-    return () => {
-      isMounted = false;
-      window.clearInterval(intervalId);
-    };
-  }, [onTasksUpdate]);
+  useEffect(() => {
+    let isMounted = true;
+    if (viewMode !== 'gantt') return () => { isMounted = false; };
+    loadGanttTasks(isMounted, dbFilters);
+    const intervalId = window.setInterval(() => loadGanttTasks(true, dbFilters), 30000);
+    return () => { isMounted = false; window.clearInterval(intervalId); };
+  }, [viewMode, dbFilters]);
 
   const handleTaskStatusChange = async (taskId: number, statusId: number) => {
-    const matchingStatus = statusOptions.find((status) => status.id === statusId);
-    const nextStatusName = matchingStatus?.name ?? '';
-
-    const isTask = tasks.find((task) => task.id === taskId)?.isPlanningSte ?? false;
-    await updateStatusAsync(taskId, statusId, !isTask,false);
-
-    const updatedTasks = tasks.map(task =>
-      task.id === taskId
-        ? {
-          ...task,
-          statuID: statusId,
-          statusName: nextStatusName || task.statusName,
-          isClosed: statusKeyFromName(nextStatusName || task.statusName) === 'done'
-        }
-        : task
-    );
-    onTasksUpdate(updatedTasks);
+    const nextStatusName = statusOptions.find(s => s.id === statusId)?.name ?? '';
+    const isTask = tasks.find(t => t.id === taskId)?.isPlanningSte ?? false;
+    await updateStatusAsync(taskId, statusId, !isTask, false);
+    onTasksUpdate(tasks.map(task => task.id === taskId
+      ? { ...task, statuID: statusId, statusName: nextStatusName || task.statusName, isClosed: statusKeyFromName(nextStatusName || task.statusName) === 'done' }
+      : task));
   };
 
-  const handleTaskUpdateFromCard = async (updatedTask: TaskReview) => {
+  const buildChanges = (editedTask: TaskReview): TaskUpdatePatch => ({
+    id: editedTask.id,
+    subject: editedTask.subject,
+    statuID: editedTask.statuID,
+    urgencyID: editedTask.urgencyID,
+    dependsOnStepID: editedTask.dependsOnStepID,
+    dependsOnTaskID: editedTask.dependsOnTaskID,
+    workDays: editedTask.workDays,
+    workHours: editedTask.workHours,
+    percentage: editedTask.percentage,
+    startDate: editedTask.startDate,
+    endDate: editedTask.endDate,
+    duration: editedTask.duration
+  });
+
+  const handleTaskUpdateFromCard = async (
+    updatedTask: TaskReview,
+    employeeLinks: EmployeeLink[] = [],
+    options?: TaskCardSaveOptions
+  ) => {
+    const stepCascade = options?.taskStepHoursCascade;
+    const pdc = options?.taskParentDateCascade;
     const currentTask = tasks.find(t => t.id === updatedTask.id);
-    const statusChanged = currentTask && currentTask.statuID !== updatedTask.statuID;
+    const isTask = currentTask?.isPlanningSte ?? false;
+    if (currentTask && currentTask.statuID !== updatedTask.statuID) {
+      const nextStatusName = statusOptions.find(s => s.id === (updatedTask.statuID ?? 0))?.name ?? updatedTask.statusName ?? '';
+      await updateStatusAsync(updatedTask.id, updatedTask.statuID ?? 0, !isTask, false);
+      updatedTask = { ...updatedTask, statusName: nextStatusName, isClosed: statusKeyFromName(nextStatusName) === 'done' };
+    }
+    if (currentTask && currentTask.isClosed !== updatedTask.isClosed)
+      await updateIsClosedAsync(updatedTask.id, updatedTask.isClosed ?? false, !isTask);
 
-    if (statusChanged) {
-      const matchingStatus = statusOptions.find((status) => status.id === (updatedTask.statuID ?? 0));
-      const nextStatusName = matchingStatus?.name ?? updatedTask.statusName ?? '';
+    if (stepCascade) {
+      const c = stepCascade;
+      for (const tu of c.taskUpdates) {
+        const isCurrent = tu.id === updatedTask.id;
+        const patch: TaskUpdatePatch = isCurrent
+          ? { ...buildChanges(updatedTask), workHours: tu.workHours, workDays: tu.workDays, percentage: tu.percentage }
+          : { id: tu.id, workHours: tu.workHours, workDays: tu.workDays, percentage: tu.percentage };
+        await updateTaskAsync(
+          patch,
+          isCurrent ? employeeLinks : [],
+          true
+        );
+      }
 
-      const isTask = currentTask?.isPlanningSte ?? false;
-      await updateStatusAsync(updatedTask.id, updatedTask.statuID ?? 0, !isTask,false);
+      const pdcForStep = pdc && pdc.stepId === c.stepId ? pdc : undefined;
+      for (const o of pdcForStep?.otherTaskDateUpdates ?? []) {
+        await updateTaskAsync(
+          { id: o.id, startDate: o.startDate, endDate: o.endDate, duration: o.duration },
+          [],
+          true
+        );
+      }
 
-      updatedTask = {
-        ...updatedTask,
-        statusName: nextStatusName || updatedTask.statusName,
-        isClosed: statusKeyFromName(nextStatusName || updatedTask.statusName) === 'done'
-      };
+      const stepPatch: TaskUpdatePatch = { id: c.stepId };
+      if (c.newStepWorkHours != null) stepPatch.workHours = c.newStepWorkHours;
+      if (c.duration != null) stepPatch.duration = c.duration;
+      if (c.workDays != null) stepPatch.workDays = c.workDays;
+      if (pdcForStep) {
+        stepPatch.startDate = pdcForStep.startDate;
+        stepPatch.endDate = pdcForStep.endDate;
+        if (pdcForStep.duration != null) stepPatch.duration = pdcForStep.duration;
+        if (pdcForStep.workHours != null) stepPatch.workHours = pdcForStep.workHours;
+        if (pdcForStep.workDays != null) stepPatch.workDays = pdcForStep.workDays;
+      }
+      if (Object.keys(stepPatch).length > 1) {
+        await updateTaskAsync(stepPatch, [], false);
+      }
+
+      onTasksUpdate(
+        tasks.map(t => {
+          if (t.id === updatedTask.id) return { ...updatedTask };
+          const tu = c.taskUpdates.find(x => x.id === t.id);
+          if (tu) return { ...t, workHours: tu.workHours, workDays: tu.workDays, percentage: tu.percentage };
+          const oDate = pdcForStep?.otherTaskDateUpdates?.find(x => x.id === t.id);
+          if (oDate) return { ...t, startDate: oDate.startDate, endDate: oDate.endDate, duration: oDate.duration };
+          if (t.isPlanningSte && t.id === c.stepId) {
+            return {
+              ...t,
+              workHours: pdcForStep?.workHours ?? c.newStepWorkHours,
+              workDays: pdcForStep?.workDays ?? c.workDays ?? (pdcForStep?.workHours ?? c.newStepWorkHours) / 8,
+              ...(pdcForStep ? { startDate: pdcForStep.startDate, endDate: pdcForStep.endDate } : {}),
+              ...(pdcForStep?.duration != null ? { duration: pdcForStep.duration } : {}),
+              ...(pdcForStep?.duration == null && c.duration != null ? { duration: c.duration } : {})
+            };
+          }
+          return t;
+        })
+      );
+      onTaskUpdate(updatedTask);
+      return;
     }
 
-    const updatedTasks = tasks.map(task =>
-      task.id === updatedTask.id ? { ...updatedTask } : task
-    );
+    if (pdc) {
+      const changes = buildChanges(updatedTask);
+      const hasT = Object.keys(changes).length > 1;
+      if (hasT || !employeeLinks.every(l => !l.isModified && !l.isNew && !l.isDeleted)) {
+        await updateTaskAsync(changes, employeeLinks, true);
+      }
 
-    onTasksUpdate(updatedTasks);
+      for (const o of pdc.otherTaskDateUpdates ?? []) {
+        await updateTaskAsync(
+          { id: o.id, startDate: o.startDate, endDate: o.endDate, duration: o.duration },
+          [],
+          true
+        );
+      }
+
+      if (pdc.stepId) {
+        await updateTaskAsync(
+          {
+            id: pdc.stepId,
+            startDate: pdc.startDate,
+            endDate: pdc.endDate,
+            ...(pdc.duration != null ? { duration: pdc.duration } : {}),
+            ...(pdc.workHours != null ? { workHours: pdc.workHours } : {}),
+            ...(pdc.workDays != null ? { workDays: pdc.workDays } : {})
+          },
+          [],
+          false
+        );
+      }
+
+      onTasksUpdate(
+        tasks.map(t => {
+          if (t.id === updatedTask.id) return { ...updatedTask };
+          const oDate = pdc.otherTaskDateUpdates?.find(x => x.id === t.id);
+          if (oDate) return { ...t, startDate: oDate.startDate, endDate: oDate.endDate, duration: oDate.duration };
+          if (t.isPlanningSte && t.id === pdc.stepId) {
+            return {
+              ...t,
+              startDate: pdc.startDate,
+              endDate: pdc.endDate,
+              ...(pdc.duration != null ? { duration: pdc.duration } : {}),
+              ...(pdc.workHours != null ? { workHours: pdc.workHours } : {}),
+              ...(pdc.workDays != null ? { workDays: pdc.workDays } : {})
+            };
+          }
+          return t;
+        })
+      );
+      onTaskUpdate(updatedTask);
+      return;
+    }
+
+    const changes = buildChanges(updatedTask);
+    const hasChanges = Object.keys(changes).length > 1;
+    if (
+      !hasChanges &&
+      employeeLinks.every(l => !l.isModified && !l.isNew && !l.isDeleted) &&
+      !options?.cascadeStage &&
+      !options?.taskStepHoursCascade &&
+      !options?.taskParentDateCascade
+    ) {
+      return;
+    }
+
+    await updateTaskAsync(changes, employeeLinks, !isTask);
+
+    if (options?.cascadeStage) {
+      const c = options.cascadeStage;
+      await updateTaskAsync(
+        { id: c.id, startDate: c.startDate, endDate: c.endDate },
+        [],
+        false
+      );
+      onTasksUpdate(
+        tasks.map(t => {
+          if (t.id === updatedTask.id) return { ...updatedTask };
+          if (t.id === c.id) return { ...t, startDate: c.startDate, endDate: c.endDate };
+          return t;
+        })
+      );
+    }
     onTaskUpdate(updatedTask);
   };
 
-  const handleTaskClick = (task: TaskReview) => setSelectedTask(task);
-
-  const handleOpenChat = (task: TaskReview, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setChatTask(task);
-    setShowChatModal(true);
+  const getUrgencyColorByKey = (urgencyId: number) => {
+    const color = priorities.find(p => p.id === urgencyId)?.color ?? '';
+    return color ? { color, stroke: color } as React.CSSProperties : undefined;
   };
 
-  const handleOpenHoursReport = (task: TaskReview, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setHoursTask(task);
-    setShowHoursModal(true);
+  const getStatusColorByKey = (statusId: number) => {
+    const color = statuses.find(s => s.id === statusId)?.color ?? '';
+    return color ? { color, stroke: color } as React.CSSProperties : undefined;
   };
 
-  const handleSaveHoursReport = (report: HoursReport) => {
-    console.log('Hours report saved:', report);
+  const isDatePast = (dateStr?: string | null) => {
+    if (!dateStr) return false;
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return d < today;
   };
 
-  const handleSendInvoiceRequest = (task: TaskReview, e: React.MouseEvent) => {
-    e.stopPropagation();
-    alert(`שליחת בקשה להגשת חשבון עבור: ${task.subject}`);
-  };
-  const handleCloseChat = () => {
-    if (chatTask?.hasChat) {
-      const updatedTasks = tasks.map(t =>
-        t.id === chatTask.id ? { ...t, hasChat: true } : t
-      );
-      onTasksUpdate(updatedTasks);
-    }
-    setShowChatModal(false);
-  };
- 
-  // const getStatusColor = (statusName: string) => {
-  //   const status = statusKeyFromName(statusName);
-  //   if (status === 'done') return 'bg-green-100 text-green-800 border-green-300';
-  //   if (status === 'inProgress') return 'bg-blue-100 text-blue-800 border-blue-300';
-  //   return 'bg-gray-100 text-gray-800 border-gray-300';
-  // };
-const getUrgencyColorByKey = (urgencyId: number) => {
-    const priority = priorities.find(p => p.id === urgencyId);
-    const color = priority?.color ?? '';
-    return color
-      ? ({ color, stroke: color } as React.CSSProperties)
-      : undefined;
-  };
-
-   const getStatusColorByKey = (statusId: number) => {
-    const status = statuses.find(s => s.id === statusId);
-    const color = status?.color ?? '';
-   return color
-      ? ({ color, stroke: color } as React.CSSProperties)
-      : undefined;
-  };
   return (
     <>
       <TaskControls
-        viewMode={viewMode}
-        setViewMode={setViewMode}
-        ganttTimeframe={ganttTimeframe}
-        setGanttTimeframe={setGanttTimeframe}
-        searchQuery={searchQuery}
-        setSearchQuery={setSearchQuery}
-        selectedEmployee=""
-        setSelectedEmployee={() => {}}
-        allEmployees={[]}
-        currentView="myTasks"
-        activeFiltersCount={activeFiltersCount}
+        viewMode={viewMode} setViewMode={setViewMode}
+        ganttTimeframe={ganttTimeframe} setGanttTimeframe={setGanttTimeframe}
+        searchQuery={searchQuery} setSearchQuery={setSearchQuery}
+        selectedEmployee="" setSelectedEmployee={() => {}} allEmployees={[]}
+        currentView="myTasks" activeFiltersCount={activeFiltersCount + columnFilterCount}
         onShowViewModal={() => setShowViewModal(true)}
         onShowFilterModal={() => setShowFilterModal(true)}
-        totalTasks={tasks.length}
-        filteredTasksCount={filteredTasks.length}
+        onOpenReportModal={handleOpenReportMenu}
+        totalTasks={tasks.length} filteredTasksCount={columnFilteredTasks.length}
       />
 
       {viewMode === 'list' ? (
-        <div className="space-y-6">
+        <>
+          <div className="space-y-6">
+            {Object.entries(groupedTasks).map(([groupName, groupTasks]) => {
+              const sorted = sortTasks(groupTasks);
+              return (
+                <div key={groupName} className="bg-white rounded-xl shadow-sm border border-gray-200">
+                  {activeView !== 'all' && (
+                    <div className={`px-6 py-3 flex items-center justify-between ${
+                      activeView === 'urgency' ? 'bg-gradient-to-r from-amber-400 to-orange-400' :
+                      activeView === 'project' ? 'bg-gradient-to-r from-blue-400 to-blue-500' :
+                      activeView === 'status'  ? 'bg-gradient-to-r from-purple-400 to-purple-500' :
+                      activeView === 'date'    ? 'bg-gradient-to-r from-emerald-400 to-teal-500' :
+                      'bg-gradient-to-r from-violet-400 to-violet-500'
+                    }`}>
+                      <div className="flex items-center justify-between w-full">
+                        <h3 className="text-white font-bold text-lg">{groupName}</h3>
+                        <span className="text-white text-sm opacity-80">({groupTasks.length} משימות)</span>
+                      </div>
+                    </div>
+                  )}
 
-          {Object.entries(groupedTasks).map(([groupName, groupTasks]) => (
-            <div key={groupName} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                  <div
+                    style={{
+                      overflowX: openColumnFilter ? 'visible' : 'auto',
+                      overflowY: openColumnFilter ? 'visible' : 'visible',
+                      WebkitOverflowScrolling: 'touch',
+                    }}
+                    className="sticky bottom-0"
+                  >
+                    <table style={{ minWidth: '1800px', width: '100%' }}>
+                      <thead className="bg-gray-50 border-b border-gray-200">
+                        <tr>
+                          {/* Eye sticky */}
+                          <th className="px-2 py-2 w-10 sticky right-0 z-20 bg-gray-50 border-l border-gray-200" />
 
-              {activeView !== 'all' && (
-                <div className="bg-gradient-to-r from-emerald-500 to-teal-600 px-6 py-3 flex items-center justify-between">
-                  <div>
-                    <h3 className="text-white font-bold text-lg">{groupName}</h3>
-                    <p className="text-emerald-100 text-sm">{groupTasks.length} משימות</p>
-                  </div>
-                  <span className="inline-flex items-center justify-center w-8 h-8 bg-white bg-opacity-25 text-white rounded-full text-sm font-bold">
-                    {groupTasks.length}
-                  </span>
-                </div>
-              )}
-
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[1800px]">
-                  <thead className="bg-gray-50 border-b border-gray-200">
-                    <tr>
-                      <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700 min-w-[200px]">תיאור המשימה</th>
-                      <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-16">Chat</th>
-                      <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700 w-32">שלב</th>
-                      <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700 w-36">נושא תכנון</th>
-                      <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700 w-28">פרויקט</th>
-                      <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700 w-20">סטטוס</th>
-                      <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700 w-20">דחיפות</th>
-                      <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700 w-24">שולח</th>
-                      <th className="px-3 py-2 text-right text-xs font-semibold text-emerald-700 w-28">תאריך התחלה</th>
-                      <th className="px-3 py-2 text-right text-xs font-semibold text-emerald-700 w-28">תאריך סיום</th>
-                      <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-28">תלוי שלב/משימה</th>
-                      <th className="px-3 py-2 text-right text-xs font-semibold text-emerald-700 w-24">תקצוב שעות</th>
-                      <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-28">אחוז ניצול</th>
-                      <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-28">דיווח שעות</th>
-                      <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-20">חשבון</th>
-                      <th className="px-2 py-2 w-10"></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {groupTasks.map((task) => (
-                      <tr
-                        key={task.id}
-                        onMouseEnter={() => setHoveredTaskId(task.id)}
-                        onMouseLeave={() => setHoveredTaskId(null)}
-                        className="hover:bg-emerald-50 transition-colors relative group"
-                      >
-                        {/* תיאור המשימה */}
-                        <td className="px-3 py-2">
-                          <span className={`text-xs font-medium ${task.isClosed ? 'line-through text-gray-400' : 'text-gray-900'} px-1 rounded`}>
-                            {task.subject}
-                          </span>
-                        </td>
-
-                        {/* Chat */}
-                        <td className="px-3 py-2 text-center" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            onClick={(e) => handleOpenChat(task, e)}
-                            className="relative p-1.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-all"
-                            title="פתח צ'אט"
-                          >
-                              <MessageSquare size={14} />
-                    {(task.hasChat || (chatTask && chatTask.id === task.id && chatTask.hasChat)) && (
-                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-white" />
-                    )}
-                            {/* <MessageSquare size={14} />
-                            {task.hasChat && (
-                              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-white" />
-                            )} */}
-                          </button>
-                        </td>
-
-                        {/* שלב */}
-                        <td className="px-3 py-2">
-                          <span className="inline-flex px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">{task.name}</span>
-                        </td>
-
-                        {/* נושא תכנון */}
-                        <td className="px-3 py-2">
-                          <span className="text-xs text-gray-600">{task.planningSubjectName}</span>
-                        </td>
-
-                        {/* פרויקט */}
-                        <td className="px-3 py-2">
-                          <span className="text-xs text-gray-600">{task.projectName}</span>
-                        </td>
-
-                        {/* סטטוס */}
-                        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                           <select
-                            value={String(statusOptions.find((status) => status.name === task.statusName)?.id ?? task.statuID ?? 0)}
-                            onChange={(e) => handleTaskStatusChange(task.id, Number(e.target.value))}
-                            disabled={task.isClosed && task.senderID !== userId}
-                            className="text-xs font-medium px-2 py-1 rounded-full border cursor-pointer focus:ring-2 focus:ring-emerald-500"
-                            style={getStatusColorByKey(task.statuID ?? 0)}
-                           >
-                            {task.statuID === 0 && !statusOptions.some((status) => status.name === task.statusName) && (
-                              <option value="0">{task.statusName}</option>
-                            )}
-                            {statusOptions.map((status) => (
-                              <option key={status.id} value={String(status.id)}>
-                                {status.name}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-
-                        {/* דחיפות */}
-                        <td className="px-3 py-2">
-                          <div className="flex items-center gap-1">
-                           <AlertCircle size={12} style={getUrgencyColorByKey(task.urgencyID)} />
-                            <span className="text-xs font-medium" style={getUrgencyColorByKey(task.urgencyID)}>
-                              {task.urgencyName}
-                            </span>
-                          </div>
-                        </td>
-
-                        {/* שולח */}
-                        <td className="px-3 py-2">
-                          <span className="text-xs text-gray-600">{task.senderName}</span>
-                        </td>
-
-                        {/* תאריך התחלה */}
-                        <td className="px-3 py-2">
-                          <div className="flex items-center gap-1">
-                            <Clock size={12} className="text-gray-400" />
-                            <span className="text-xs text-gray-600">
-                            {task.startDate ? new Date(task.startDate).toLocaleDateString('en-GB') : '-'}
-                              </span>
-                          </div>
-                        </td>
-
-                        {/* תאריך סיום */}
-                        <td className="px-3 py-2">
-                          <div className="flex items-center gap-1">
-                          <Clock size={12} className="text-gray-400" />
-                          <span className="text-xs text-gray-600">
-                            {task.endDate ? new Date(task.endDate).toLocaleDateString('en-GB') : '-'}
-                          </span>
-                          </div>
-                        </td>
-
-                        {/* תלוי שלב/משימה */}
-                        <td className="px-3 py-2 text-center">
-                          <input
-                            type="checkbox"
-                            checked={task.dependsOnStepID || false}
-                            disabled
-                            className="w-4 h-4 text-emerald-600 rounded cursor-not-allowed opacity-60"
-                          />
-                        </td>
-
-                        {/* תקצוב שעות */}
-                        <td className="px-3 py-2">
-                          <div className="flex flex-col items-start gap-0.5">
-                            <span className="inline-flex items-center gap-0.5 px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-xs font-medium">
-                              {task.workHours || 0}h
-                            </span>
-                            {task.hourReport !== undefined && task.hourReport > 0 && (
-                              <span className="text-[10px] text-gray-500">
-                                ({task.hourReport}h בפועל)
-                              </span>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* אחוז ניצול */}
-                        <td className="px-3 py-2">
-                          <div className="flex items-center gap-2">
-                            <div className="flex-1 bg-gray-200 rounded-full h-2 overflow-hidden min-w-[50px]">
-                              <div
-                                className={`h-2 rounded-full transition-all ${
-                                  (task.utilizationPercentage || 0) >= 80 ? 'bg-emerald-500' :
-                                  (task.utilizationPercentage || 0) >= 50 ? 'bg-yellow-500' :
-                                  'bg-red-500'
-                                }`}
-                                style={{ width: `${task.utilizationPercentage || 0}%` }}
+                          {/* נבדק */}
+                          {renderHeaderFilter({
+                            filterKey: 'isClosed',
+                            label: 'נבדק',
+                            headerClassName: 'px-3 py-2 text-center text-xs font-semibold text-gray-700 w-16',
+                            align: 'center',
+                            children: (
+                              <SearchableCheckboxFilter
+                                searchValue=""
+                                onSearchChange={() => {}}
+                                options={closedStateOptions}
+                                selectedValues={columnFilters.closedStates}
+                                onToggle={v => setColumnFilters(p => ({ ...p, closedStates: toggleArrayFilter(p.closedStates, v) }))}
+                                onClear={() => setColumnFilters(p => ({ ...p, closedStates: [] }))}
+                                searchPlaceholder="סינון סטטוס..."
+                                emptyMessage="לא נמצאו"
                               />
-                            </div>
-                            <span className="text-xs font-bold text-gray-700 min-w-[35px]">
-                              {task.utilizationPercentage || 0}%
+                            ),
+                          })}
+
+                          <SortableTh sortKey="subject" label="תיאור המשימה" className="px-3 py-2 text-right text-xs font-semibold text-gray-700 min-w-[200px]" sort={sort} onSort={handleSort} />
+                          <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-16">Chat</th>
+                          <SortableTh sortKey="name" label="שלב" className="px-3 py-2 text-right text-xs font-semibold text-gray-700 w-32" sort={sort} onSort={handleSort} />
+                          <SortableTh sortKey="planningSubjectName" label="נושא תכנון" className="px-3 py-2 text-right text-xs font-semibold text-gray-700 w-36" sort={sort} onSort={handleSort} />
+
+                          {renderHeaderFilter({
+                            filterKey: 'project', label: 'פרויקט',
+                            headerClassName: 'px-3 py-2 text-right text-xs font-semibold text-gray-700 w-48',
+                            sortKey: 'projectName',
+                            children: (
+                              <SearchableCheckboxFilter
+                                searchValue={columnFilterSearch.project}
+                                onSearchChange={v => setColumnFilterSearch(p => ({ ...p, project: v }))}
+                                options={projectFilterOptions} selectedValues={columnFilters.projects}
+                                onToggle={v => setColumnFilters(p => ({ ...p, projects: toggleArrayFilter(p.projects, v) }))}
+                                onClear={() => { setColumnFilters(p => ({ ...p, projects: [] })); setOpenColumnFilter(null); }}
+                                searchPlaceholder="חיפוש פרויקט..." emptyMessage="לא נמצאו פרויקטים"
+                              />
+                            ),
+                          })}
+
+                          {renderHeaderFilter({
+                            filterKey: 'status', label: 'סטטוס משימה לעובד',
+                            headerClassName: 'px-3 py-2 text-right text-xs font-semibold text-gray-700 w-20 whitespace-nowrap',
+                            sortKey: 'statusName',
+                            children: (
+                              <SearchableCheckboxFilter
+                                searchValue={columnFilterSearch.status}
+                                onSearchChange={v => setColumnFilterSearch(p => ({ ...p, status: v }))}
+                                options={statusFilterOptions} selectedValues={columnFilters.statuses}
+                                onToggle={v => setColumnFilters(p => ({ ...p, statuses: toggleArrayFilter(p.statuses, v) }))}
+                                onClear={() => { setColumnFilters(p => ({ ...p, statuses: [] })); setOpenColumnFilter(null); }}
+                                searchPlaceholder="חיפוש סטטוס..." emptyMessage="לא נמצאו סטטוסים"
+                              />
+                            ),
+                          })}
+
+                          {renderHeaderFilter({
+                            filterKey: 'urgency', label: 'עדיפות לעובד',
+                            headerClassName: 'px-3 py-2 text-right text-xs font-semibold text-gray-700 w-32',
+                            sortKey: 'urgencyName',
+                            children: (
+                              <SearchableCheckboxFilter
+                                searchValue={columnFilterSearch.urgency}
+                                onSearchChange={v => setColumnFilterSearch(p => ({ ...p, urgency: v }))}
+                                options={urgencyFilterOptions} selectedValues={columnFilters.urgencies}
+                                onToggle={v => setColumnFilters(p => ({ ...p, urgencies: toggleArrayFilter(p.urgencies, v) }))}
+                                onClear={() => { setColumnFilters(p => ({ ...p, urgencies: [] })); setOpenColumnFilter(null); }}
+                                searchPlaceholder="חיפוש עדיפות..." emptyMessage="לא נמצאו דרגות עדיפות"
+                              />
+                            ),
+                          })}
+
+                          {renderHeaderFilter({
+                            filterKey: 'sender', label: 'שולח',
+                            headerClassName: 'px-3 py-2 text-right text-xs font-semibold text-gray-700 w-24',
+                            sortKey: 'senderName',
+                            children: (
+                              <SearchableCheckboxFilter
+                                searchValue={columnFilterSearch.sender}
+                                onSearchChange={v => setColumnFilterSearch(p => ({ ...p, sender: v }))}
+                                options={senderFilterOptions} selectedValues={columnFilters.senders}
+                                onToggle={v => setColumnFilters(p => ({ ...p, senders: toggleArrayFilter(p.senders, v) }))}
+                                onClear={() => { setColumnFilters(p => ({ ...p, senders: [] })); setOpenColumnFilter(null); }}
+                                searchPlaceholder="חיפוש שולח..." emptyMessage="לא נמצאו שולחים"
+                              />
+                            ),
+                          })}
+
+                          {renderHeaderFilter({
+                            filterKey: 'startDate', label: 'תאריך התחלה',
+                            headerClassName: 'px-3 py-2 text-right text-xs font-semibold text-emerald-700 w-28',
+                            contentClassName: 'w-80', sortKey: 'startDate',
+                            children: (
+                              <DateFilter
+                                fromDate={columnFilters.startDateFrom} toDate={columnFilters.startDateTo}
+                                onFromDateChange={v => setColumnFilters(p => ({ ...p, startDateFrom: v }))}
+                                onToDateChange={v => setColumnFilters(p => ({ ...p, startDateTo: v }))}
+                                onClear={() => { setColumnFilters(p => ({ ...p, startDateFrom: '', startDateTo: '' })); setOpenColumnFilter(null); }}
+                              />
+                            ),
+                          })}
+
+                          {renderHeaderFilter({
+                            filterKey: 'endDate', label: 'תאריך סיום',
+                            headerClassName: 'px-3 py-2 text-right text-xs font-semibold text-emerald-700 w-28',
+                            contentClassName: 'w-80', sortKey: 'endDate',
+                            children: (
+                              <DateFilter
+                                fromDate={columnFilters.endDateFrom} toDate={columnFilters.endDateTo}
+                                onFromDateChange={v => setColumnFilters(p => ({ ...p, endDateFrom: v }))}
+                                onToDateChange={v => setColumnFilters(p => ({ ...p, endDateTo: v }))}
+                                onClear={() => { setColumnFilters(p => ({ ...p, endDateFrom: '', endDateTo: '' })); setOpenColumnFilter(null); }}
+                              />
+                            ),
+                          })}
+
+                          <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-28">תלוי משימה</th>
+                          <SortableTh sortKey="workHours" label="תקצוב שעות למשימה" className="px-3 py-2 text-right text-xs font-semibold text-emerald-700 w-32" sort={sort} onSort={handleSort} />
+                          <SortableTh sortKey="utilizationPercentage" label="ניצול שעות במשימה" className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-28" sort={sort} onSort={handleSort} />
+                          <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-28">דיווח שעות</th>
+                          <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-20">אינדקציה לחשבון</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {sorted.map(task => (
+                          <tr key={task.id} className="hover:bg-emerald-50 transition-colors relative group">
+
+                            {/* Eye sticky */}
+                            <td className="px-2 py-2 sticky right-0 z-10 bg-white group-hover:bg-emerald-50 border-l border-gray-200">
+                              <button
+                                onClick={() => setSelectedTask(task)}
+                                className="p-1 rounded-lg bg-emerald-500 text-white hover:bg-emerald-600 transition-all opacity-0 group-hover:opacity-100"
+                                title="צפה בכרטיס משימה"
+                              >
+                                <Eye size={14} />
+                              </button>
+                            </td>
+
+                            {/* נבדק */}
+                            <td className="px-3 py-2 text-center">
+                              <input
+                                type="checkbox"
+                                checked={task.isClosed || false}
+                                disabled
+                                className="w-4 h-4 rounded border-gray-300 text-emerald-500 cursor-not-allowed opacity-70"
+                              />
+                            </td>
+
+                            {/* תיאור המשימה */}
+                            <td className="px-3 py-2 max-w-[200px]">
+                              <span
+                                className="text-xs font-medium text-gray-900 px-1 rounded block overflow-hidden"
+                                style={{
+                                  display: '-webkit-box',
+                                  WebkitLineClamp: 2,
+                                  WebkitBoxOrient: 'vertical',
+                                  overflow: 'hidden',
+                                }}
+                                title={task.subject}
+                              >
+                                {task.subject}
+                              </span>
+                            </td>
+
+                            {/* Chat */}
+                            <td className="px-3 py-2 text-center" onClick={e => e.stopPropagation()}>
+                              <button
+                                onClick={e => { e.stopPropagation(); setChatTask(task); setShowChatModal(true); }}
+                                className="relative p-1.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-all"
+                                title="פתח צ'אט"
+                              >
+                                <MessageSquare size={14} />
+                                {(task.hasChat || (chatTask && chatTask.id === task.id && chatTask.hasChat)) && (
+                                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-white" />
+                                )}
+                              </button>
+                            </td>
+
+                            {/* שלב */}
+                           <td className="px-3 py-2 max-w-[128px]">
+                            <span
+                              className="inline-flex px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs font-medium max-w-full overflow-hidden text-ellipsis whitespace-nowrap block"
+                              title={task.name}
+                            >
+                              {task.name}
                             </span>
-                          </div>
-                        </td>
+                          </td>
 
-                        {/* דיווח שעות */}
-                        <td className="px-3 py-2 text-center" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            onClick={(e) => handleOpenHoursReport(task, e)}
-                            className="px-2 py-1 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-all flex items-center gap-1 text-xs font-bold mx-auto"
-                            title="דיווח שעות לשלב/משימה"
-                          >
-                            <Clock size={12} />
-                            <span className="hidden lg:inline">דיווח</span>
-                          </button>
-                        </td>
-
-                        {/* חשבון */}
-                        <td className="px-3 py-2 text-center" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            onClick={(e) => handleSendInvoiceRequest(task, e)}
-                            className="px-2 py-1 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-all flex items-center gap-1 text-xs font-bold mx-auto"
-                            title="שלח בקשה להגשת חשבון"
-                          >
-                            <Send size={12} />
-                            <span className="hidden lg:inline">חשבון</span>
-                          </button>
-                        </td>
-
-                        {/* View Eye Button */}
-                        <td className="px-2 py-2">
-                          <button
-                            onClick={() => handleTaskClick(task)}
-                            className={`p-1 rounded-lg bg-emerald-500 text-white hover:bg-emerald-600 transition-all ${
-                              hoveredTaskId === task.id ? 'opacity-100' : 'opacity-0'
-                            }`}
-                            title="צפה בכרטיס משימה"
-                          >
-                            <Eye size={14} />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-
-                    {groupTasks.length === 0 && (
-                      <tr>
-                        <td colSpan={16} className="px-4 py-12 text-center text-gray-500">
-                          לא נמצאו משימות
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                  
-                </table>
-              </div>
-            </div>
-          ))}
+                          {/* נושא תכנון */}
+                          <td className="px-3 py-2 max-w-[144px]">
+                            <span
+                              className="text-xs text-gray-600 block overflow-hidden text-ellipsis whitespace-nowrap"
+                              title={task.planningSubjectName}
+                            >
+                              {task.planningSubjectName}
+                            </span>
+                          </td>
 
 
-
+                           {/* פרויקט */}
+                          <td className="px-3 py-2 w-48 max-w-[192px]"> 
+                            <span
+                              className="text-xs text-gray-600 block overflow-hidden text-ellipsis whitespace-nowrap"
+                              title={task.projectName}
+                            >
+                              {task.projectName}
+                            </span>
+                          </td>
+                           {/* סטטוס */}
+<td className="px-3 py-2" onClick={e => e.stopPropagation()}>
+  <div className="flex flex-col gap-1">
+    {(() => {
+      const selectedStatusId = String(statusOptions.find(s => s.name === task.statusName)?.id ?? task.statuID ?? 0);
+      const selectedStatusName = statusOptions.find(s => String(s.id) === selectedStatusId)?.name ?? task.statusName;
+      const fallbackOptionNeeded = task.statuID === 0 && !statusOptions.some(s => s.name === task.statusName) && selectedStatusId !== '0';
+      return (
+        <div className="relative w-full">
+          <div
+            className="text-xs font-medium px-2 py-1 rounded-full border w-full pl-6 overflow-hidden whitespace-nowrap text-ellipsis"
+            style={getStatusColorByKey(task.statuID ?? 0)}
+            title={selectedStatusName}
+          >
+            {truncateTo18(selectedStatusName)}
+          </div>
+          <ChevronDown
+            size={12}
+            className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 opacity-80"
+            style={getStatusColorByKey(task.statuID ?? 0)}
+          />
+          <select
+            value={selectedStatusId}
+            onChange={e => handleTaskStatusChange(task.id, Number(e.target.value))}
+            disabled={task.isClosed && task.senderID !== userId}
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+            title={selectedStatusName}
+          >
+            {fallbackOptionNeeded && <option value="0">{task.statusName}</option>}
+            {statusOptions.map(s => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
+          </select>
         </div>
-      ) : (
-        <GanttChart tasks={filteredTasks} timeframe={ganttTimeframe} currentView="myTasks" />
-      )}
+      );
+    })()}
 
+    {(() => {
+      const pct = statuses.find(s => s.id === (task.statuID ?? 0))?.progressPercentage ?? 0;
+      const color = statuses.find(s => s.id === (task.statuID ?? 0))?.color ?? '#10b981';
+      return (
+        <div className="flex items-center gap-1.5 px-1">
+          <div className="flex-1 bg-gray-200 rounded-full h-1.5 overflow-hidden">
+            <div
+              className="h-1.5 rounded-full transition-all duration-300"
+              style={{ width: `${pct}%`, backgroundColor: color }}
+            />
+          </div>
+          <span className="text-[10px] text-gray-500 min-w-[28px]">{pct}%</span>
+        </div>
+      );
+    })()}
+  </div>
+</td>
+
+                            {/* עדיפות */}
+                            <td className="px-3 py-2 w-32 max-w-[140px]">
+                              <div className="flex items-start gap-1">
+                                <AlertCircle size={12} style={getUrgencyColorByKey(task.urgencyID)} />
+                                <span
+                                  className="text-xs font-medium block overflow-hidden"
+                                  style={{
+                                    ...getUrgencyColorByKey(task.urgencyID),
+                                    display: '-webkit-box',
+                                    WebkitLineClamp: 2,
+                                    WebkitBoxOrient: 'vertical'
+                                  }}
+                                  title={task.urgencyName}
+                                >
+                                  {task.urgencyName}
+                                </span>
+                              </div>
+                            </td>
+
+                            {/* שולח */}
+                            <td className="px-3 py-2">
+                              <span className="text-xs text-gray-600">{task.senderName}</span>
+                            </td>
+
+                            {/* תאריך התחלה */}
+                            <td className="px-3 py-2">
+                              <div className="flex items-center gap-1">
+                                <Clock size={12} className="text-gray-400" />
+                                <span className="text-xs text-gray-600">
+                                  {task.startDate ? new Date(task.startDate).toLocaleDateString('en-GB') : '-'}
+                                </span>
+                              </div>
+                            </td>
+
+                    {/* תאריך סיום */}
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-1">
+                        <Clock size={12} className={isDatePast(task.endDate) && task.statuID !== 3 ? 'text-red-500' : 'text-gray-400'} />
+                        <span className={`text-xs ${isDatePast(task.endDate) && task.statuID !== 3 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
+                          {task.endDate ? new Date(task.endDate).toLocaleDateString('en-GB') : '-'}
+                        </span>
+                      </div>
+                    </td>
+
+                            {/* תלוי בשלב */}
+                            <td className="px-3 py-2 text-center">
+                              <input
+                                type="checkbox"
+                                checked={task.dependsOnStepID || false}
+                                disabled
+                                className="w-4 h-4 text-emerald-600 rounded cursor-not-allowed opacity-60"
+                              />
+                            </td>
+
+                            {/* תקצוב שעות */}
+                            <td className="px-3 py-2">
+                              <div className="flex flex-col items-start gap-0.5">
+                                <span className="inline-flex items-center gap-0.5 px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-xs font-medium">
+                                  {task.workHours || 0}h
+                                </span>
+                                {task.hourReport !== undefined && task.hourReport > 0 && (
+                                  <span className="text-[10px] text-gray-500">({task.hourReport}h בפועל)</span>
+                                )}
+                              </div>
+                            </td>
+
+                            {/* אחוז ניצול */}
+                            <td className="px-3 py-2">
+                              <div className="flex items-center gap-2">
+                                <div className="flex-1 bg-gray-200 rounded-full h-2 overflow-hidden min-w-[50px]">
+                                  <div
+                                    className={`h-2 rounded-full transition-all ${
+                                      (task.utilizationPercentage || 0) >= 80 ? 'bg-emerald-500' :
+                                      (task.utilizationPercentage || 0) >= 50 ? 'bg-yellow-500' : 'bg-red-500'
+                                    }`}
+                                    style={{ width: `${task.utilizationPercentage || 0}%` }}
+                                  />
+                                </div>
+                                <span className="text-xs font-bold text-gray-700 min-w-[35px]">
+                                  {(task.utilizationPercentage || 0) % 1 !== 0
+                                    ? (task.utilizationPercentage || 0).toFixed(2)
+                                    : Math.round(task.utilizationPercentage || 0)}%
+                                </span>
+                              </div>
+                            </td>
+
+                            {/* דיווח שעות */}
+                            <td className="px-3 py-2 text-center" onClick={e => e.stopPropagation()}>
+                              <button
+                                onClick={e => { e.stopPropagation(); setHoursTask(task); setShowHoursModal(true); }}
+                                className="px-2 py-1 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-all flex items-center gap-1 text-xs font-bold mx-auto"
+                                title="דיווח שעות לשלב/משימה"
+                              >
+                                <Clock size={12} />
+                                <span className="hidden lg:inline">דיווח</span>
+                              </button>
+                            </td>
+
+                            {/* חשבון */}
+                            <td className="px-3 py-2 text-center" onClick={e => e.stopPropagation()}>
+                              <button
+                                onClick={e => { e.stopPropagation(); alert(`שליחת בקשה להגשת חשבון עבור: ${task.subject}`); }}
+                                className="px-2 py-1 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-all flex items-center gap-1 text-xs font-bold mx-auto"
+                                title="שלח בקשה להגשת חשבון"
+                              >
+                                <Send size={12} />
+                                <span className="hidden lg:inline">חשבון</span>
+                              </button>
+                            </td>
+
+                          </tr>
+                        ))}
+
+                        {sorted.length === 0 && (
+                          <tr>
+                            <td colSpan={17} className="px-4 py-2 text-center text-gray-400 text-xs">
+                              לא נמצאו משימות
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+{/* ── מקטע סיכום ── */}
+{(() => {
+  const totalTasks = columnFilteredTasks.length;
+  const completedTasks = columnFilteredTasks.filter(t => t.isClosed).length;
+  const openTasks = totalTasks - completedTasks;
+  const plannedHours = columnFilteredTasks.reduce((s, t) => s + (t.workHours ?? 0), 0);
+  const actualHours = columnFilteredTasks.reduce((s, t) => s + (t.hourReport ?? 0), 0);
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl p-4 mt-2 mb-2">
+      <div className="grid grid-cols-5 gap-4 text-center">
+        <div>
+          <div className="text-2xl font-bold text-blue-600">{totalTasks}</div>
+          <div className="text-xs text-gray-500 mt-1">משימות</div>
+        </div>
+        <div>
+          <div className="text-2xl font-bold text-indigo-600">
+            {plannedHours % 1 !== 0 ? plannedHours.toFixed(2) : plannedHours}
+          </div>
+          <div className="text-xs text-gray-500 mt-1">שעות מתוכננות</div>
+        </div>
+        <div>
+          <div className="text-2xl font-bold text-purple-600">
+            {actualHours % 1 !== 0 ? actualHours.toFixed(2) : actualHours}
+          </div>
+          <div className="text-xs text-gray-500 mt-1">שעות בפועל</div>
+        </div>
+        <div>
+          <div className="text-2xl font-bold text-emerald-600">{completedTasks}</div>
+          <div className="text-xs text-gray-500 mt-1">הושלמו</div>
+        </div>
+        <div>
+          <div className="text-2xl font-bold text-amber-600">{openTasks}</div>
+          <div className="text-xs text-gray-500 mt-1">משימות פתוחות</div>
+        </div>
+      </div>
+    </div>
+  );
+})()}
+          {/* ── מקטע הערות ── */}
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 mt-4">
+            <div className="flex items-center gap-2 mb-3 border-b border-amber-200 pb-2">
+              <span className="text-amber-600 text-lg">💡</span>
+              <h3 className="text-sm font-semibold text-amber-800">הערות</h3>
+            </div>
+            <ul className="space-y-2">
+              <li className="flex items-start gap-2 text-sm text-amber-800">
+                <span className="text-amber-500 mt-0.5">•</span>
+                <span>רשימת המשימות שלי יופיעו רק משימות שהם משוייכות אלי</span>
+              </li>
+              <li className="flex items-start gap-2 text-sm text-amber-800">
+                <span className="text-amber-500 mt-0.5">•</span>
+                <span>אפשר לשנות תצוגה לרשימה, לקבץ לפי קטגוריה, עדיפות ועוד</span>
+              </li>
+            </ul>
+          </div>
+        </>
+      ) : (
+        <GanttChart
+          tasks={ganttTask} timeframe={ganttTimeframe} currentView="myTasks"
+          statuses={statuses} priorities={priorities}
+          onUpdate={(updatedTask, employeeLinks, options) => { void handleTaskUpdateFromCard(updatedTask, employeeLinks, options); setSelectedTask(null); }}
+          viewMode={'myTasks'}
+        />
+      )}
+{showReportModal && (
+        <MyTasksReportModal
+          isOpen={showReportModal}
+          onClose={() => setShowReportModal(false)}
+          rows={getReportRows()}
+          columns={MY_TASKS_REPORT_COLUMNS}
+          filteredCount={columnFilteredTasks.length}
+          reportTitle="דוח משימות - המשימות שלי"
+          fileBaseName={`my-tasks-report-${new Date().toISOString().slice(0, 10)}`}
+          onCopySummary={handleCopySummary}
+          onExportJson={handleExportJson}
+        />
+      )}
       {showViewModal && (
         <ViewModal
           activeView={activeView}
-          onViewChange={(view) => { setActiveView(view); setShowViewModal(false); }}
+          onViewChange={view => { setActiveView(view); setShowViewModal(false); }}
           onClose={() => setShowViewModal(false)}
         />
       )}
 
       {showFilterModal && (
-        <FilterModal
-          filters={filters}
-          onFilterToggle={toggleFilter}
-          onFiltersChange={setFilters}
-          onClearFilters={clearFilters}
+        <DbFilterModal
           onClose={() => setShowFilterModal(false)}
-          baseTasks={baseTasks}
-          projectSearchQuery={projectSearchQuery}
-          setProjectSearchQuery={setProjectSearchQuery}
+          onApply={nextFilters => { setDbFilters(nextFilters); loadTasks(true, nextFilters); }}
+          currentFilters={dbFilters}
         />
       )}
 
@@ -525,122 +1133,31 @@ const getUrgencyColorByKey = (urgencyId: number) => {
         <TaskCard
           task={selectedTask}
           onClose={() => setSelectedTask(null)}
-          onUpdate={(updatedTask) => { handleTaskUpdateFromCard(updatedTask); setSelectedTask(null); }}
+          onUpdate={(updatedTask, employeeLinks, options) => { void handleTaskUpdateFromCard(updatedTask, employeeLinks, options); setSelectedTask(null); }}
           viewMode="myTasks"
           statuses={statuses}
           priorities={priorities}
         />
       )}
 
-      {/* Hours Report Modal */}
       {showHoursModal && hoursTask && (
         <HoursReportModal
           task={hoursTask}
           onClose={() => { setShowHoursModal(false); setHoursTask(null); }}
-          onSave={handleSaveHoursReport}
+          onSave={(report: HoursReport) => { console.log('Hours report saved:', report); }}
         />
       )}
 
-      {/* Chat Modal */}
-         {showChatModal && chatTask && (
+      {showChatModal && chatTask && (
         <ChatModal
           task={chatTask}
           setTask={setChatTask}
-          onClose={() =>{handleCloseChat();}}
+          onClose={() => {
+            if (chatTask?.hasChat) onTasksUpdate(tasks.map(t => t.id === chatTask.id ? { ...t, hasChat: true } : t));
+            setShowChatModal(false);
+          }}
         />
       )}
-      {/* {showChatModal && chatTask && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
-            <div className="bg-gradient-to-r from-blue-500 to-purple-500 px-6 py-4 rounded-t-xl flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <MessageSquare size={26} className="text-white" />
-                <div>
-                  <h3 className="text-xl font-bold text-white">צ'אט משימה</h3>
-                  <p className="text-sm text-blue-100">{chatTask.subject}</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowChatModal(false)}
-                className="text-white hover:bg-white hover:bg-opacity-20 rounded-full p-2 w-9 h-9 flex items-center justify-center font-bold text-xl transition-all"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="flex-1 p-6 overflow-y-auto bg-gray-50">
-              <div className="space-y-4">
-                <div className="bg-white rounded-lg p-4 shadow-sm border border-gray-200">
-                  <p className="text-sm text-gray-600 mb-2">💬 אזור הצ'אט של המשימה</p>
-                  <div className="text-xs text-gray-500 bg-blue-50 p-3 rounded">
-                    <strong>פרויקט:</strong> {chatTask.projectName}
-                    <br />
-                    <strong>סטטוס:</strong> {statusTextFromName(chatTask.statusName)}
-                  </div>
-                </div>
-                {messages.map((msg) => (
-                  <div key={msg.id} className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm">
-                    <div className="flex items-start gap-3">
-                      <div className="w-10 h-10 rounded-full bg-gradient-to-r from-pink-400 to-purple-400 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
-                        {msg.avatar}
-                      </div>
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className="font-semibold text-gray-900">{msg.user}</span>
-                          <span className="text-sm text-gray-500">{msg.timestamp}</span>
-                        </div>
-                        <p className="text-gray-700 text-sm">
-                          {msg.mentions?.map((mention, i) => (
-                            <span key={i} className="text-blue-600 font-medium">{mention} </span>
-                          ))}
-                          {msg.message}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                <div className="text-center text-gray-400 text-sm py-4">
-                  ההודעות יופיעו כאן
-                </div>
-              </div>
-            </div>
-
-            <div className="border-t border-gray-200 p-4 bg-white rounded-b-xl">
-              <div className="flex gap-2 mb-3">
-                <input
-                  type="text"
-                  value={chatMessage}
-                  onChange={(e) => setChatMessage(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } }}
-                  placeholder="כתוב הודעה..."
-                  className="flex-1 px-4 py-2.5 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                />
-                <button
-                  onClick={handleSendMessage}
-                  disabled={!chatMessage.trim()}
-                  className="px-6 py-2.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 font-bold transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  שלח
-                </button>
-              </div>
-              {showLinkInput && (
-                <div className="mb-3 flex gap-2">
-                  <input type="url" value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} placeholder="הזן קישור (URL)..." className="flex-1 px-4 py-2 border-2 border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm" />
-                  <button onClick={handleAddLink} className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm font-semibold">הוסף</button>
-                  <button onClick={() => setShowLinkInput(false)} className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-sm">ביטול</button>
-                </div>
-              )}
-              <div className="flex items-center gap-2">
-                <button className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-all" title="הזכר אנשים">@</button>
-                <button onClick={() => setShowLinkInput(!showLinkInput)} className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-all" title="הוסף קישור"><LinkIcon size={18} /></button>
-                <button className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-all" title="הוסף קובץ"><Paperclip size={18} /></button>
-                <button className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-all" title="הוסף תמונה"><ImageIcon size={18} /></button>
-                <button className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-all" title="אימוג'י"><Smile size={18} /></button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )} */}
     </>
   );
 }

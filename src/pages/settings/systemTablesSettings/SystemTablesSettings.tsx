@@ -21,24 +21,18 @@ export default function SystemTablesSettings() {
   const {
     statuses,
     priorities,
-    //addStatus,
     updateStatus: updateStatusState,
-    //deleteStatus,
-    //addPriority,
     updatePriority: updatePriorityState,
-   // deletePriority,
     setStatuses,
     setPriorities
   } = useSystemTables(initialSystemTables);
 
-  //const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [originalStatuses, setOriginalStatuses] = useState<StatusItem[]>([]);
   const [originalPriorities, setOriginalPriorities] = useState<PriorityItem[]>([]);
   const [newStatus, setNewStatus] = useState({ name: '', color: '#6B7280', progressPercentage: 0 });
   const [newPriority, setNewPriority] = useState({ name: '', color: '#10B981' });
   
-  // Message box state
   const [messageBox, setMessageBox] = useState<{
     isOpen: boolean;
     title: string;
@@ -46,7 +40,6 @@ export default function SystemTablesSettings() {
     type: 'alert' | 'success' | 'error' | 'warning';
   }>({ isOpen: false, title: '', message: '', type: 'alert' });
 
-  // Confirm dialog state
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
     title: string;
@@ -54,11 +47,9 @@ export default function SystemTablesSettings() {
     onConfirm: () => void;
   }>({ isOpen: false, title: '', message: '', onConfirm: () => {} });
 
-  // Load statuses and priorities from server on component mount
   useEffect(() => {
     const loadData = async () => {
       try {
-        //setIsLoading(true);
         const [fetchedStatuses, fetchedPriorities] = await Promise.all([
           getStatuses(),
           getPriorities()
@@ -69,17 +60,9 @@ export default function SystemTablesSettings() {
         setOriginalPriorities(JSON.parse(JSON.stringify(fetchedPriorities)));
       } catch (error) {
         console.error('Failed to load system tables:', error);
-        setMessageBox({
-          isOpen: true,
-          title: 'שגיאה',
-          message: 'שגיאה בטעינת טבלאות מערכת',
-          type: 'error'
-        });
-      } finally {
-      //  setIsLoading(false);
+        setMessageBox({ isOpen: true, title: 'שגיאה', message: 'שגיאה בטעינת טבלאות מערכת', type: 'error' });
       }
     };
-
     loadData();
   }, []);
 
@@ -93,12 +76,9 @@ export default function SystemTablesSettings() {
           isDefault: false,
           isActive: true
         });
-        
-        // Extract id from response object
-        const newId = typeof response === 'object' && response !== null && 'id' in response 
-          ? (response as any).id 
+        const newId = typeof response === 'object' && response !== null && 'id' in response
+          ? (response as any).id
           : response;
-        
         const newStatusItem: StatusItem = {
           id: newId,
           name: newStatus.name,
@@ -107,30 +87,49 @@ export default function SystemTablesSettings() {
           isDefault: false,
           isActive: true
         };
-        
         const updatedStatuses = [...statuses, newStatusItem];
         setStatuses(updatedStatuses);
         setOriginalStatuses(JSON.parse(JSON.stringify(updatedStatuses)));
         setNewStatus({ name: '', color: '#6B7280', progressPercentage: 0 });
-        setMessageBox({
-          isOpen: true,
-          title: 'הצלחה',
-          message: 'הסטטוס נוסף בהצלחה!',
-          type: 'success'
-        });
+        setMessageBox({ isOpen: true, title: 'הצלחה', message: 'הסטטוס נוסף בהצלחה!', type: 'success' });
       } catch (error) {
         console.error('Failed to add status:', error);
-        setMessageBox({
-          isOpen: true,
-          title: 'שגיאה',
-          message: 'שגיאה בהוספת סטטוס',
-          type: 'error'
-        });
+        setMessageBox({ isOpen: true, title: 'שגיאה', message: 'שגיאה בהוספת סטטוס', type: 'error' });
       }
     }
   };
 
   const handleDeleteStatus = async (id: number) => {
+    const isDefault = statuses.find(s => s.id === id)?.isDefault;
+
+    if (isDefault) {
+      const others = statuses.filter(s => s.id !== id);
+      if (others.length === 0) {
+        setMessageBox({ isOpen: true, title: 'שגיאה', message: 'לא ניתן למחוק את הסטטוס היחיד', type: 'error' });
+        return;
+      }
+      setConfirmDialog({
+        isOpen: true,
+        title: 'אישור מחיקה',
+        message: `סטטוס זה הוא ברירת המחדל. "${others[0].name}" יהפוך לברירת המחדל החדשה. להמשיך?`,
+        onConfirm: async () => {
+          try {
+            const success = await deleteStatusApi(id);
+            if (success) {
+              const updatedStatuses = others.map((s, i) => i === 0 ? { ...s, isDefault: true } : s);
+              await updateStatus({ ...others[0], isDefault: true });
+              setStatuses(updatedStatuses);
+              setOriginalStatuses(JSON.parse(JSON.stringify(updatedStatuses)));
+              setMessageBox({ isOpen: true, title: 'הצלחה', message: 'הסטטוס נמחק ובחירת ברירת המחדל עודכנה', type: 'success' });
+            }
+          } catch (error) {
+            setMessageBox({ isOpen: true, title: 'שגיאה', message: 'שגיאה במחיקת סטטוס', type: 'error' });
+          }
+        }
+      });
+      return;
+    }
+
     setConfirmDialog({
       isOpen: true,
       title: 'אישור מחיקה',
@@ -142,21 +141,10 @@ export default function SystemTablesSettings() {
             const updatedStatuses = statuses.filter(s => s.id !== id);
             setStatuses(updatedStatuses);
             setOriginalStatuses(JSON.parse(JSON.stringify(updatedStatuses)));
-            setMessageBox({
-              isOpen: true,
-              title: 'הצלחה',
-              message: 'הסטטוס נמחק בהצלחה!',
-              type: 'success'
-            });
+            setMessageBox({ isOpen: true, title: 'הצלחה', message: 'הסטטוס נמחק בהצלחה!', type: 'success' });
           }
         } catch (error) {
-          console.error('Failed to delete status:', error);
-          setMessageBox({
-            isOpen: true,
-            title: 'שגיאה',
-            message: 'שגיאה במחיקת סטטוס',
-            type: 'error'
-          });
+          setMessageBox({ isOpen: true, title: 'שגיאה', message: 'שגיאה במחיקת סטטוס', type: 'error' });
         }
       }
     });
@@ -171,12 +159,9 @@ export default function SystemTablesSettings() {
           isDefault: false,
           isActive: true
         });
-        
-        // Extract id from response object
-        const newId = typeof response === 'object' && response !== null && 'id' in response 
-          ? (response as any).id 
+        const newId = typeof response === 'object' && response !== null && 'id' in response
+          ? (response as any).id
           : response;
-        
         const newPriorityItem: PriorityItem = {
           id: newId,
           name: newPriority.name,
@@ -184,30 +169,49 @@ export default function SystemTablesSettings() {
           isDefault: false,
           isActive: true
         };
-        
         const updatedPriorities = [...priorities, newPriorityItem];
         setPriorities(updatedPriorities);
         setOriginalPriorities(JSON.parse(JSON.stringify(updatedPriorities)));
         setNewPriority({ name: '', color: '#10B981' });
-        setMessageBox({
-          isOpen: true,
-          title: 'הצלחה',
-          message: 'העדיפות נוספה בהצלחה!',
-          type: 'success'
-        });
+        setMessageBox({ isOpen: true, title: 'הצלחה', message: 'העדיפות נוספה בהצלחה!', type: 'success' });
       } catch (error) {
         console.error('Failed to add priority:', error);
-        setMessageBox({
-          isOpen: true,
-          title: 'שגיאה',
-          message: 'שגיאה בהוספת עדיפות',
-          type: 'error'
-        });
+        setMessageBox({ isOpen: true, title: 'שגיאה', message: 'שגיאה בהוספת עדיפות', type: 'error' });
       }
     }
   };
 
   const handleDeletePriority = async (id: number) => {
+    const isDefault = priorities.find(p => p.id === id)?.isDefault;
+
+    if (isDefault) {
+      const others = priorities.filter(p => p.id !== id);
+      if (others.length === 0) {
+        setMessageBox({ isOpen: true, title: 'שגיאה', message: 'לא ניתן למחוק את העדיפות היחידה', type: 'error' });
+        return;
+      }
+      setConfirmDialog({
+        isOpen: true,
+        title: 'אישור מחיקה',
+        message: `עדיפות זו היא ברירת המחדל. "${others[0].name}" תהפוך לברירת המחדל החדשה. להמשיך?`,
+        onConfirm: async () => {
+          try {
+            const success = await deletePriorityApi(id);
+            if (success) {
+              const updatedPriorities = others.map((p, i) => i === 0 ? { ...p, isDefault: true } : p);
+              await updatePriority({ ...others[0], isDefault: true });
+              setPriorities(updatedPriorities);
+              setOriginalPriorities(JSON.parse(JSON.stringify(updatedPriorities)));
+              setMessageBox({ isOpen: true, title: 'הצלחה', message: 'העדיפות נמחקה ובחירת ברירת המחדל עודכנה', type: 'success' });
+            }
+          } catch (error) {
+            setMessageBox({ isOpen: true, title: 'שגיאה', message: 'שגיאה במחיקת עדיפות', type: 'error' });
+          }
+        }
+      });
+      return;
+    }
+
     setConfirmDialog({
       isOpen: true,
       title: 'אישור מחיקה',
@@ -219,21 +223,10 @@ export default function SystemTablesSettings() {
             const updatedPriorities = priorities.filter(p => p.id !== id);
             setPriorities(updatedPriorities);
             setOriginalPriorities(JSON.parse(JSON.stringify(updatedPriorities)));
-            setMessageBox({
-              isOpen: true,
-              title: 'הצלחה',
-              message: 'העדיפות נמחקה בהצלחה!',
-              type: 'success'
-            });
+            setMessageBox({ isOpen: true, title: 'הצלחה', message: 'העדיפות נמחקה בהצלחה!', type: 'success' });
           }
         } catch (error) {
-          console.error('Failed to delete priority:', error);
-          setMessageBox({
-            isOpen: true,
-            title: 'שגיאה',
-            message: 'שגיאה במחיקת עדיפות',
-            type: 'error'
-          });
+          setMessageBox({ isOpen: true, title: 'שגיאה', message: 'שגיאה במחיקת עדיפות', type: 'error' });
         }
       }
     });
@@ -242,82 +235,46 @@ export default function SystemTablesSettings() {
   const handleSave = async () => {
     try {
       setIsSaving(true);
-      
-      // Find changed statuses
       const changedStatuses = statuses.filter(status => {
         const original = originalStatuses.find(orig => orig.id === status.id);
-        if (!original) return false; // New items already saved
-        return original.name !== status.name || 
-               original.color !== status.color || 
-               original.progressPercentage !== status.progressPercentage ||
-               original.isDefault !== status.isDefault ||
-               original.isActive !== status.isActive;
+        if (!original) return false;
+        return original.name !== status.name ||
+          original.color !== status.color ||
+          original.progressPercentage !== status.progressPercentage ||
+          original.isDefault !== status.isDefault ||
+          original.isActive !== status.isActive;
       });
-      
-      // Find changed priorities
       const changedPriorities = priorities.filter(priority => {
         const original = originalPriorities.find(orig => orig.id === priority.id);
-        if (!original) return false; // New items already saved
-        return original.name !== priority.name || 
-               original.color !== priority.color || 
-               original.isDefault !== priority.isDefault ||
-               original.isActive !== priority.isActive;
+        if (!original) return false;
+        return original.name !== priority.name ||
+          original.color !== priority.color ||
+          original.isDefault !== priority.isDefault ||
+          original.isActive !== priority.isActive;
       });
-      
       if (changedStatuses.length === 0 && changedPriorities.length === 0) {
-        setMessageBox({
-          isOpen: true,
-          title: 'אין שינויים',
-          message: 'אין שינויים לשמירה',
-          type: 'warning'
-        });
+        setMessageBox({ isOpen: true, title: 'אין שינויים', message: 'אין שינויים לשמירה', type: 'warning' });
         setIsSaving(false);
         return;
       }
-        setIsSaving(true);
-      // Update statuses
-      const statusPromises = changedStatuses.map(status =>{
-        if(status.name===""){
-          setMessageBox({
-          isOpen: true,
-          title: 'אין שם לסטטוס',
-          message: 'אנא הזן שם לסטטוס לפני השמירה',
-          type: 'warning'
-        });
-        const origionStatuse=originalStatuses.find(s=>s.id===status.id);
-        status.name=origionStatuse? origionStatuse.name : status.name;
-        setIsSaving(false);
-        return; //Promise.resolve(); // Skip update if name is empty
+      const statusPromises = changedStatuses.map(status => {
+        if (status.name === '') {
+          setMessageBox({ isOpen: true, title: 'אין שם לסטטוס', message: 'אנא הזן שם לסטטוס לפני השמירה', type: 'warning' });
+          const origionalStatuse = originalStatuses.find(s => s.id === status.id);
+          status.name = origionalStatuse ? origionalStatuse.name : status.name;
+          setIsSaving(false);
+          return;
         }
-        
-         updateStatus(status)});
-        
-      
-      // Update priorities
+        return updateStatus(status);
+      });
       const priorityPromises = changedPriorities.map(priority => updatePriority(priority));
-      
-      // Wait for all updates
       await Promise.all([...statusPromises, ...priorityPromises]);
-      
-      // Update originals after successful save
       setOriginalStatuses(JSON.parse(JSON.stringify(statuses)));
       setOriginalPriorities(JSON.parse(JSON.stringify(priorities)));
-
-      setMessageBox({
-        isOpen: true,
-        title: 'הצלחה',
-        message: 'הטבלאות נשמרו בהצלחה!',
-        type: 'success'
-      });
-    
+      setMessageBox({ isOpen: true, title: 'הצלחה', message: 'הטבלאות נשמרו בהצלחה!', type: 'success' });
     } catch (error) {
       console.error('Failed to save system tables:', error);
-      setMessageBox({
-        isOpen: true,
-        title: 'שגיאה',
-        message: 'שגיאה בשמירת הטבלאות',
-        type: 'error'
-      });
+      setMessageBox({ isOpen: true, title: 'שגיאה', message: 'שגיאה בשמירת הטבלאות', type: 'error' });
     } finally {
       setIsSaving(false);
     }
@@ -341,7 +298,6 @@ export default function SystemTablesSettings() {
       {/* סטטוס שלב / משימה */}
       <div className="bg-gray-50 rounded-lg p-3 sm:p-4 border border-gray-200">
         <h4 className="text-sm sm:text-base font-bold text-gray-800 mb-3">סטטוס שלב / משימה</h4>
-        
         <div className="overflow-x-auto">
           <div className="min-w-[650px] space-y-2">
             {/* Headers */}
@@ -356,7 +312,7 @@ export default function SystemTablesSettings() {
 
             {/* Status List */}
             {statuses.map((status) => (
-                <div key={status.id} className="grid grid-cols-[1fr_80px_100px_80px_60px_60px] gap-2 items-center bg-white p-2 rounded-lg border border-gray-200">
+              <div key={status.id} className="grid grid-cols-[1fr_80px_100px_80px_60px_60px] gap-2 items-center bg-white p-2 rounded-lg border border-gray-200">
                 <input
                   type="text"
                   value={status.name}
@@ -366,57 +322,64 @@ export default function SystemTablesSettings() {
                 />
                 <div className="flex items-center gap-1 justify-center">
                   <input
-                  type="color"
-                  value={status.color}
-                  onChange={(e) => updateStatusState(status.id, 'color', e.target.value)}
-                  className="w-7 h-7 sm:w-8 sm:h-8 rounded border border-gray-300 cursor-pointer"
+                    type="color"
+                    value={status.color}
+                    onChange={(e) => updateStatusState(status.id, 'color', e.target.value)}
+                    disabled={status.name === 'הושלם'}
+                    className="w-7 h-7 sm:w-8 sm:h-8 rounded border border-gray-300 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
                   />
-                  {/* <div
-                  className="w-7 h-7 sm:w-8 sm:h-8 rounded border border-gray-300"
-                  style={{ backgroundColor: status.color }}
-                  /> */}
                 </div>
                 <div className="flex items-center justify-center gap-1">
                   <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={status.progressPercentage}
-                  onChange={(e) => updateStatusState(status.id, 'progressPercentage', Number(e.target.value))}
-                  className="w-full px-2 py-1.5 text-xs sm:text-sm text-center border border-gray-300 rounded focus:ring-2 focus:ring-emerald-500"
-                  style={{ 
-                    backgroundColor: status.color,
-                    color: 'white',
-                    fontWeight: 'bold'
-                  }}
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={status.progressPercentage}
+                    onChange={(e) => updateStatusState(status.id, 'progressPercentage', Number(e.target.value))}
+                    disabled={status.name === 'הושלם'}
+                    className="w-full px-2 py-1.5 text-xs sm:text-sm text-center border border-gray-300 rounded focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                    style={{ backgroundColor: status.color, color: 'white', fontWeight: 'bold' }}
                   />
                   <span className="text-xs text-gray-600">%</span>
                 </div>
                 <div className="flex justify-center">
                   <button
-                  onClick={() => updateStatusState(status.id, 'isDefault', !status.isDefault)}
-                  className={`p-1.5 rounded transition-colors ${
-                    status.isDefault ? 'text-yellow-500' : 'text-gray-300 hover:text-yellow-400'
-                  }`}
+                    onClick={() => {
+                      if (status.name !== 'הושלם' && !status.isDefault) {
+                        const updated = statuses.map(s => ({ ...s, isDefault: s.id === status.id }));
+                        setStatuses(updated);
+                      }
+                    }}
+                    className={`p-1.5 rounded transition-colors ${
+                      status.name === 'הושלם'
+                        ? 'text-gray-300 cursor-not-allowed'
+                        : status.isDefault
+                          ? 'text-yellow-500 cursor-default'
+                          : 'text-gray-300 hover:text-yellow-400'
+                    }`}
+                    title={status.name === 'הושלם' ? 'לא ניתן לערוך סטטוס הושלם' : (status.isDefault ? 'ברירת מחדל נוכחית' : 'הגדר כברירת מחדל')}
+                    disabled={status.name === 'הושלם'}
                   >
-                  <Star size={18} className={status.isDefault ? 'fill-yellow-500' : ''} />
+                    <Star size={18} className={status.isDefault ? 'fill-yellow-500' : ''} />
                   </button>
                 </div>
                 <div className="flex justify-center">
                   <input
-                  type="checkbox"
-                  checked={status.isActive}
-                  onChange={(e) => updateStatusState(status.id, 'isActive', e.target.checked)}
-                  className="w-4 h-4 text-emerald-600 rounded cursor-pointer"
+                    type="checkbox"
+                    checked={status.isActive}
+                    onChange={(e) => updateStatusState(status.id, 'isActive', e.target.checked)}
+                    disabled={status.name === 'הושלם'}
+                    className="w-4 h-4 text-emerald-600 rounded cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
                   />
                 </div>
                 <button
-                  onClick={() => handleDeleteStatus(status.id)}
-                  className="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors"
+                  onClick={() => status.name !== 'הושלם' && handleDeleteStatus(status.id)}
+                  disabled={status.name === 'הושלם'}
+                  className="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors disabled:text-gray-300 disabled:hover:bg-transparent disabled:cursor-not-allowed"
                 >
                   <Trash2 size={16} />
                 </button>
-                </div>
+              </div>
             ))}
 
             {/* Add New Status */}
@@ -445,11 +408,7 @@ export default function SystemTablesSettings() {
                   value={newStatus.progressPercentage}
                   onChange={(e) => setNewStatus({ ...newStatus, progressPercentage: Number(e.target.value) })}
                   className="w-full px-2 py-1.5 text-xs sm:text-sm text-center border-2 border-emerald-400 rounded focus:ring-2 focus:ring-emerald-500"
-                  style={{ 
-                    backgroundColor: newStatus.color,
-                    color: 'white',
-                    fontWeight: 'bold'
-                  }}
+                  style={{ backgroundColor: newStatus.color, color: 'white', fontWeight: 'bold' }}
                 />
                 <span className="text-xs text-emerald-700">%</span>
               </div>
@@ -470,7 +429,6 @@ export default function SystemTablesSettings() {
       {/* עדיפות שלב / משימה */}
       <div className="bg-gray-50 rounded-lg p-3 sm:p-4 border border-gray-200">
         <h4 className="text-sm sm:text-base font-bold text-gray-800 mb-3">עדיפות שלב / משימה</h4>
-        
         <div className="overflow-x-auto">
           <div className="min-w-[550px] space-y-2">
             {/* Headers */}
@@ -498,14 +456,19 @@ export default function SystemTablesSettings() {
                     onChange={(e) => updatePriorityState(priority.id, 'color', e.target.value)}
                     className="w-7 h-7 sm:w-8 sm:h-8 rounded border border-gray-300 cursor-pointer"
                   />
-                 
                 </div>
                 <div className="flex justify-center">
                   <button
-                    onClick={() => updatePriorityState(priority.id, 'isDefault', !priority.isDefault)}
+                    onClick={() => {
+                      if (!priority.isDefault) {
+                        const updated = priorities.map(p => ({ ...p, isDefault: p.id === priority.id }));
+                        setPriorities(updated);
+                      }
+                    }}
                     className={`p-1.5 rounded transition-colors ${
-                      priority.isDefault ? 'text-yellow-500' : 'text-gray-300 hover:text-yellow-400'
+                      priority.isDefault ? 'text-yellow-500 cursor-default' : 'text-gray-300 hover:text-yellow-400'
                     }`}
+                    title={priority.isDefault ? 'ברירת מחדל נוכחית' : 'הגדר כברירת מחדל'}
                   >
                     <Star size={18} className={priority.isDefault ? 'fill-yellow-500' : ''} />
                   </button>

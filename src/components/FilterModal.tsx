@@ -94,7 +94,7 @@ export default function FilterModal({
               </div>
             </div>
             <div>
-              <h3 className="font-semibold mb-3 text-gray-800">דחיפות</h3>
+              <h3 className="font-semibold mb-3 text-gray-800">עדיפות</h3>
               <div className="space-y-2">
                 {['high', 'medium', 'low'].map(urgency => (
                   <label key={urgency} className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded-lg cursor-pointer">

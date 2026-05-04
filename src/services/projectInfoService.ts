@@ -79,7 +79,7 @@ export const updateProjectIsDefault = async (projectId: number, isDefault: boole
 export const getBasicProjects = async (): Promise<ProjectBasic[]> => {
 	try {
 		const user = getAuthenticatedUser();
-		const request = { database: user.dataBase };
+		const request = { database: user.dataBase, employeeId: user.id, permissionId: user.permissionId };
 
 		const endpoint = buildEndpoint(user.urlConnection, "/ProjectInfo/GetBasicProjects");
 		const response = await authService.makeAuthenticatedRequest(

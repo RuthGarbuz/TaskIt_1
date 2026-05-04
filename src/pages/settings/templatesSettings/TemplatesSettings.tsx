@@ -93,11 +93,11 @@ export default function TemplatesSettings() {
     <div className="space-y-6" dir="rtl">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold text-gray-800">תבניות ונושאי תכנון</h2>
+        <h2 className="text-base sm:text-lg font-bold text-gray-800">תבניות ונושאי תכנון</h2>
         <div className="flex gap-3">
           <button
             onClick={handleCancel}
-            className="flex items-center gap-2 px-5 py-2.5 border-2 border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-bold transition-all"
+            className="flex items-center gap-2 px-6 py-2.5 border-2 border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-semibold text-sm transition-all"
           >
             <X size={18} />
             ביטול
@@ -105,7 +105,9 @@ export default function TemplatesSettings() {
           <button
             onClick={handleSave}
             disabled={isSaving}
-            className="flex items-center gap-2 px-6 py-2.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 font-bold shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 font-semibold shadow-md text-sm w-full sm:w-auto disabled:bg-gray-400 disabled:cursor-not-allowed"
+
+            //className="flex items-center gap-2 px-6 py-2.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 font-bold shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Save size={18} />
             {isSaving ? 'שומר...' : 'שמור שינויים'}
@@ -127,7 +129,7 @@ export default function TemplatesSettings() {
         </button>
         <button
           onClick={() => setActiveTab('templates')}
-          className={`px-4 py-2 font-semibold transition-all ${
+          className={`hidden px-4 py-2 font-semibold transition-all ${
             activeTab === 'templates'
               ? 'text-emerald-600 border-b-2 border-emerald-600'
               : 'text-gray-500 hover:text-gray-700'

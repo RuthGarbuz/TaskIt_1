@@ -24,8 +24,13 @@ const getUrgencyKey = (task: TaskLike): string => {
 const getProject = (task: TaskLike): string =>
   'project' in task ? task.project : (task as TaskReview).projectName ?? '';
 
-const getDateValue = (task: TaskLike): string =>
-  'date' in task ? (task.date ?? '') : (task as TaskReview).creatDate ?? '';
+const getDateValue = (task: TaskLike): string => {
+  const raw = 'date' in task ? (task.date ?? '') : (task as TaskReview).creatDate ?? '';
+  if (!raw) return '';
+  const d = new Date(raw);
+  if (isNaN(d.getTime())) return raw;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 
 export const useTaskGrouping = <T extends TaskLike>(tasks: T[], activeView: GroupView) => {
   const groupedTasks = useMemo(() => {
@@ -36,14 +41,16 @@ export const useTaskGrouping = <T extends TaskLike>(tasks: T[], activeView: Grou
     const grouped: { [key: string]: T[] } = {};
 
     if (activeView === 'status') {
-      grouped['לביצוע'] = tasks.filter(t => getStatusKey(t as TaskLike) === 'todo');
-      grouped['בביצוע'] = tasks.filter(t => getStatusKey(t as TaskLike) === 'inProgress');
-      grouped['הושלם'] = tasks.filter(t => getStatusKey(t as TaskLike) === 'done');
-    } else if (activeView === 'urgency') {
-      grouped['דחיפות גבוהה'] = tasks.filter(t => getUrgencyKey(t as TaskLike) === 'high');
-      grouped['דחיפות בינונית'] = tasks.filter(t => getUrgencyKey(t as TaskLike) === 'medium');
-      grouped['דחיפות נמוכה'] = tasks.filter(t => getUrgencyKey(t as TaskLike) === 'low');
-    } else if (activeView === 'project') {
+  const statuses = [...new Set(tasks.map(t => (t as TaskReview).statusName ?? ''))];
+  statuses.forEach(status => {
+    grouped[status || 'לא ידוע'] = tasks.filter(t => (t as TaskReview).statusName === status);
+  });
+} else if (activeView === 'urgency') {
+  const urgencies = [...new Set(tasks.map(t => (t as TaskReview).urgencyName ?? ''))];
+  urgencies.forEach(urgency => {
+    grouped[urgency || 'לא ידוע'] = tasks.filter(t => (t as TaskReview).urgencyName === urgency);
+  });
+} else if (activeView === 'project') {
       const projects = [...new Set(tasks.map(t => getProject(t as TaskLike)))];
       projects.forEach(project => {
         grouped[project] = tasks.filter(t => getProject(t as TaskLike) === project);

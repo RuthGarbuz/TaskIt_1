@@ -37,4 +37,5 @@ export type CurrentView =
   | 'hoursReport'
   | 'workload'
   | 'settings'
-  | 'projects';
+  | 'projects'
+  | 'billTasks';

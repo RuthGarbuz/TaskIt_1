@@ -26,7 +26,7 @@ export interface PlanningStepTemplate {
   stepDuration: number;            // StepDuration
   isActive: boolean;               // IsActive
   orderNum: number;                // OrderNum
-  dependsOnStepId: number | null;  // DependsOnStepID
+  dependsOnStepId: boolean | null;  // DependsOnStepID
   workDays: number;                // WorkDays
   // UI only
   isExpanded: boolean;
@@ -57,6 +57,7 @@ export interface PlanningStepEmployeeLinkTemplate {
   isDeleted?: boolean;
 }
 
+
 // PlanningTaskTemplates (child of PlanningStepTemplates)
 export interface PlanningTaskTemplate {
   id: number;                      // ID
@@ -67,7 +68,7 @@ export interface PlanningTaskTemplate {
   orderNum: number;                // OrderNum
   taskPercentage: number;          // TaskPercentage
   taskDuration: number;            // TaskDuration
-  dependsOnTaskId: number | null;  // DependsOnTaskID
+  dependsOnTaskId: boolean | null;  // DependsOnTaskID
   workDays: number;                // WorkDays
   // UI only
   isNew?: boolean;
@@ -135,7 +136,7 @@ export interface SaveStageRequest {
   stepDuration: number;
   isActive: boolean;
   orderNum: number;
-  dependsOnStepId?: number | null;
+  dependsOnStepId?:boolean;
   employees: SaveEmployeeLinkRequest[];
   deletedEmployeeIds: number[];
   tasks: SaveTaskRequest[];
@@ -151,7 +152,7 @@ export interface SaveTaskRequest {
   taskDuration: number;
   isActive: boolean;
   orderNum: number;
-  dependsOnTaskId?: number | null;
+  dependsOnTaskId?:boolean;
   employees: SaveEmployeeLinkRequest[];
   deletedEmployeeIds: number[];
 }
@@ -190,6 +191,7 @@ export interface EmployeeLink {
   workDays: number;
   duration: number;
   statusId?: number;
+  hoursActual?: number;
   isNew?: boolean;
   isModified?: boolean;
   isDeleted?: boolean;

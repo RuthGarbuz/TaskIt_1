@@ -50,9 +50,10 @@ function ReadField({ label, value, icon: Icon, colSpan }: {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 interface ProjectInfoTabProps {
   projectId: number;
+  permissionId?: number;
 }
 
-export default function ProjectInfoTab({ projectId }: ProjectInfoTabProps) {
+export default function ProjectInfoTab({ projectId, permissionId }: ProjectInfoTabProps) {
 
   // ── Editable: כספים only ─────────────────────────────────────────────────
   const [hourlyRate,    setHourlyRate]    = useState(250);
@@ -180,8 +181,8 @@ export default function ProjectInfoTab({ projectId }: ProjectInfoTabProps) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-
+     
+<div className={`grid gap-5 ${permissionId && permissionId > 2 ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-2'}`}>
         {/* ── פרטי פרויקט + אנשים ומשרד — קריאה בלבד (מאוחד) ─────────────── */}
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center gap-2">
@@ -219,88 +220,89 @@ export default function ProjectInfoTab({ projectId }: ProjectInfoTabProps) {
         </div>
 
         {/* ── עלות שעת עבודה ממוצעת — ניתן לעריכה ────────────────────────── */}
-        <div className="bg-white rounded-xl border-2 border-amber-300 shadow-sm overflow-hidden">
-          <div className="px-5 py-3 bg-amber-50 border-b border-amber-200 flex items-center gap-2">
-            <DollarSign size={15} className="text-amber-500" />
-            <span className="font-bold text-amber-800 text-sm">עלות שעת עבודה ממוצעת (₪)</span>
-            <span className="mr-auto text-[11px] text-amber-600 bg-amber-100 px-2 py-0.5 rounded font-semibold">
-              ✏️ ניתן לעריכה
-            </span>
-          </div>
+        {permissionId && permissionId <2&& (
+          <div className="bg-white rounded-xl border-2 border-amber-300 shadow-sm overflow-hidden">
+            <div className="px-5 py-3 bg-amber-50 border-b border-amber-200 flex items-center gap-2">
+              <DollarSign size={15} className="text-amber-500" />
+              <span className="font-bold text-amber-800 text-sm">עלות שעת עבודה ממוצעת (₪)</span>
+              <span className="mr-auto text-[11px] text-amber-600 bg-amber-100 px-2 py-0.5 rounded font-semibold">
+          ✏️ ניתן לעריכה
+              </span>
+            </div>
 
-          <div className="p-6 space-y-6">
+            <div className="p-6 space-y-6">
 
-            {/* עלות שעת עבודה */}
-            <div className="space-y-3">
-              <label className="text-sm font-bold text-gray-700 flex items-center gap-1.5">
-                <Clock size={15} className="text-amber-500" />
-                עלות שעת עבודה לפרויקט
-                <span className="text-xs text-gray-400 font-normal mr-1">ניתן לשינוי</span>
-              </label>
-                <div className="relative flex items-center">
-                  <span className="absolute left-4 text-base font-bold text-gray-400 pointer-events-none">₪</span>
-                  <input
-                    type="number" min={0} step={10}
-                    dir="ltr"
-                    value={hourlyRate}
-                    onChange={e => updateRate(Number(e.target.value))}
-                    className="w-full pl-8 pr-4 py-3 text-2xl font-bold text-left border-2 border-amber-300 rounded-xl focus:ring-2 focus:ring-amber-400 focus:border-amber-400 bg-amber-50 transition-all"
-                  />
-                </div>
+              {/* עלות שעת עבודה */}
+              <div className="space-y-3">
+          <label className="text-sm font-bold text-gray-700 flex items-center gap-1.5">
+            <Clock size={15} className="text-amber-500" />
+            עלות שעת עבודה לפרויקט
+            <span className="text-xs text-gray-400 font-normal mr-1">ניתן לשינוי</span>
+          </label>
+            <div className="relative flex items-center">
+              <span className="absolute left-4 text-base font-bold text-gray-400 pointer-events-none">₪</span>
               <input
-                type="range" min={0} max={2000} step={10}
+                type="number" min={0} step={10}
+                dir="ltr"
                 value={hourlyRate}
                 onChange={e => updateRate(Number(e.target.value))}
-              
-                className="w-full h-2 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                className="w-full pl-8 pr-4 py-3 text-2xl font-bold text-left border-2 border-amber-300 rounded-xl focus:ring-2 focus:ring-amber-400 focus:border-amber-400 bg-amber-50 transition-all"
               />
-              <div className="flex justify-between text-xs text-gray-400">
-                <span>₪0</span><span>₪1,000</span><span>₪2,000</span>
-              </div>
             </div>
-
-            {/* אחוז רווח */}
-            <div className="space-y-3">
-              <label className="text-sm font-bold text-gray-700 flex items-center gap-1.5">
-                <Percent size={15} className="text-amber-500" />
-                אחוז רווח רצוי לפרויקט
-                <span className="text-xs text-gray-400 font-normal mr-1">ניתן לשינוי · 0%–100%</span>
-              </label>
-              <div className="relative flex items-center">
-                <input
-                  type="number" min={0} max={100} step={1}
-                dir="ltr"
-
-                  value={profitPercent}
-                  onChange={e => updateProfit(Number(e.target.value))}
-                  className="w-full pr-4 pl-8 py-3 text-2xl font-bold border-2 border-amber-300 rounded-xl focus:ring-2 focus:ring-amber-400 focus:border-amber-400 bg-amber-50 transition-all"
-                />
-                <span className="absolute left-3 text-base font-bold text-gray-400 pointer-events-none">%</span>
+          <input
+            type="range" min={0} max={2000} step={10}
+            value={hourlyRate}
+            onChange={e => updateRate(Number(e.target.value))}
+          
+            className="w-full h-2 rounded-lg appearance-none cursor-pointer accent-amber-500"
+          />
+          <div className="flex justify-between text-xs text-gray-400">
+            <span>₪0</span><span>₪1,000</span><span>₪2,000</span>
+          </div>
               </div>
-              <div className="w-full bg-gray-100 rounded-full h-4 overflow-hidden">
-                <div
-                  className={`h-4 rounded-full transition-all duration-300 ${
-                    profitPercent >= 20 ? 'bg-emerald-500'
-                    : profitPercent >= 10 ? 'bg-yellow-400'
-                    : 'bg-red-400'
-                  }`}
-                  style={{ width: `${profitPercent}%` }}
-                />
+
+              {/* אחוז רווח */}
+              <div className="space-y-3">
+          <label className="text-sm font-bold text-gray-700 flex items-center gap-1.5">
+            <Percent size={15} className="text-amber-500" />
+            אחוז רווח רצוי לפרויקט
+            <span className="text-xs text-gray-400 font-normal mr-1">ניתן לשינוי · 0%–100%</span>
+          </label>
+          <div className="relative flex items-center">
+            <input
+              type="number" min={0} max={100} step={1}
+            dir="ltr"
+
+              value={profitPercent}
+              onChange={e => updateProfit(Number(e.target.value))}
+              className="w-full pr-4 pl-8 py-3 text-2xl font-bold border-2 border-amber-300 rounded-xl focus:ring-2 focus:ring-amber-400 focus:border-amber-400 bg-amber-50 transition-all"
+            />
+            <span className="absolute left-3 text-base font-bold text-gray-400 pointer-events-none">%</span>
+          </div>
+          <div className="w-full bg-gray-100 rounded-full h-4 overflow-hidden">
+            <div
+              className={`h-4 rounded-full transition-all duration-300 ${
+                profitPercent >= 20 ? 'bg-emerald-500'
+                : profitPercent >= 10 ? 'bg-yellow-400'
+                : 'bg-red-400'
+              }`}
+              style={{ width: `${profitPercent}%` }}
+            />
+          </div>
+          <p className={`text-xs font-semibold ${
+            profitPercent >= 20 ? 'text-emerald-600'
+            : profitPercent >= 10 ? 'text-yellow-600'
+            : 'text-red-500'
+          }`}>
+            {profitPercent >= 20 ? '✓ יעד רווח תקין'
+             : profitPercent >= 10 ? '⚠ רווח נמוך'
+             : '✗ רווח נמוך מאוד'}
+          </p>
               </div>
-              <p className={`text-xs font-semibold ${
-                profitPercent >= 20 ? 'text-emerald-600'
-                : profitPercent >= 10 ? 'text-yellow-600'
-                : 'text-red-500'
-              }`}>
-                {profitPercent >= 20 ? '✓ יעד רווח תקין'
-                 : profitPercent >= 10 ? '⚠ רווח נמוך'
-                 : '✗ רווח נמוך מאוד'}
-              </p>
-            </div>
 
           </div>
         </div>
-
+        )}
       </div>
     </div>
   );

@@ -280,7 +280,7 @@ const handleSave = async () => {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-2">
           <UsersIcon size={20} className="text-emerald-600 flex-shrink-0" />
-          <h3 className="text-base sm:text-lg font-bold text-gray-800">הגדרת תיקף עבודה חודשי לעובד</h3>
+          <h3 className="text-base sm:text-lg font-bold text-gray-800">הגדרת היקף משרה חודשית לעובד</h3>
         </div>
         <button
           onClick={handleSave}
@@ -300,7 +300,7 @@ const handleSave = async () => {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="חיפוש לפי שם או ת״ז..."
+            placeholder="חיפוש עובד לפי שם או ת״ז"
             className="w-full pr-10 pl-4 py-2 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 text-sm"
           />
           {searchQuery && (
@@ -409,7 +409,7 @@ const handleSave = async () => {
               className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 font-semibold text-sm transition-all"
             >
               <Plus size={18} />
-              הוסף עובד חדש
+               הוספת עובד חדש 
             </button>
           </div>
 
