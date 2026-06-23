@@ -1,6 +1,9 @@
 // AddTaskModal.tsx
 import { useState, useEffect } from 'react';
-import { X, ChevronDown, AlertCircle, User, Check } from 'lucide-react';
+import { X, ChevronDown, AlertCircle, Check } from 'lucide-react';
+import { getPlanningStepsByProjectId } from '../../services/projectPlanningService';
+import NumberInput from '../shared/NumberInput';
+import { DateInput } from '../shared/DateInput';
 
 export interface Project {
   id: number;
@@ -52,6 +55,12 @@ interface AddTaskModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSubmit: (task: NewTaskData) => void;
+  onOpenProjectTopicStep?: (payload: {
+    projectId: number;
+    projectName: string;
+    planningTopicId: number;
+    stageId: number;
+  }) => void;
   projects?: Project[];
   planningTopics?: PlanningTopic[];
   stages?: Stage[];
@@ -68,6 +77,7 @@ export default function AddTaskModal({
   isOpen,
   onClose,
   onSubmit,
+  onOpenProjectTopicStep,
   projects = [],
   planningTopics = [],
   stages = [],
@@ -93,17 +103,26 @@ export default function AddTaskModal({
   const [priority, setPriority] = useState(defaultPriority);
   const [activeTab, setActiveTab] = useState<'general' | 'employees'>('general');
   const [hierarchyDone, setHierarchyDone] = useState(false);
+  const [serverPlanningTopics, setServerPlanningTopics] = useState<PlanningTopic[]>([]);
+  const [serverStages, setServerStages] = useState<Stage[]>([]);
+  const [hierarchyLoading, setHierarchyLoading] = useState(false);
+  const [hierarchyError, setHierarchyError] = useState('');
+  const [useServerHierarchy, setUseServerHierarchy] = useState(false);
 
   const safeProjects = projects ?? [];
   const safeTopics = planningTopics ?? [];
   const safeStages = stages ?? [];
   const safeEmployees = employees ?? [];
 
-  const filteredTopics = safeTopics.filter(t => t.projectId === selectedProjectId);
-  const filteredStages = safeStages.filter(s => s.planningTopicId === selectedPlanningTopicId);
-  const selectedStage = safeStages.find(s => s.id === selectedStageId);
+  const filteredTopics = useServerHierarchy
+    ? serverPlanningTopics
+    : safeTopics.filter(t => t.projectId === selectedProjectId);
+  const filteredStages = useServerHierarchy
+    ? serverStages.filter(s => s.planningTopicId === selectedPlanningTopicId)
+    : safeStages.filter(s => s.planningTopicId === selectedPlanningTopicId);
+  const selectedStage = (useServerHierarchy ? serverStages : safeStages).find(s => s.id === selectedStageId);
   const selectedProject = safeProjects.find(p => p.id === selectedProjectId);
-  const selectedTopic = safeTopics.find(t => t.id === selectedPlanningTopicId);
+  const selectedTopic = (useServerHierarchy ? serverPlanningTopics : safeTopics).find(t => t.id === selectedPlanningTopicId);
   const hasOtherTasks = (selectedStage?.tasks?.length ?? 0) > 0;
   const nextTaskNumber = (selectedStage?.tasks?.length ?? 0) + 1;
   const defaultTitle = `משימה ${nextTaskNumber}`;
@@ -124,6 +143,39 @@ export default function AddTaskModal({
       setTitle('');
     }
   }, [selectedStage]);
+
+  useEffect(() => {
+    const loadPlanningByProject = async () => {
+      setHierarchyError('');
+      setServerPlanningTopics([]);
+      setServerStages([]);
+      setUseServerHierarchy(false);
+      if (selectedProjectId === '') return;
+      setHierarchyLoading(true);
+      try {
+        const data = await getPlanningStepsByProjectId(Number(selectedProjectId), null);
+        const topics: PlanningTopic[] = (data.subjects ?? []).map((s) => ({
+          id: s.id,
+          projectId: Number(selectedProjectId),
+          name: s.name,
+        }));
+        const stages: Stage[] = (data.steps ?? []).map((st) => ({
+          id: st.id,
+          planningTopicId: st.planningSubjectId,
+          name: st.name,
+        }));
+        setServerPlanningTopics(topics);
+        setServerStages(stages);
+        setUseServerHierarchy(true);
+      } catch (error) {
+        setUseServerHierarchy(false);
+        setHierarchyError(error instanceof Error ? error.message : 'שגיאה בטעינת נושאים ושלבים');
+      } finally {
+        setHierarchyLoading(false);
+      }
+    };
+    void loadPlanningByProject();
+  }, [selectedProjectId]);
 
   const handlePercentChange = (val: number) => {
     setPercentOfStage(val);
@@ -164,6 +216,8 @@ export default function AddTaskModal({
     setDependsOnTask(false); setAssignedIds([]);
     setStatus(defaultStatus); setPriority(defaultPriority);
     setActiveTab('general'); setHierarchyDone(false);
+    setServerPlanningTopics([]); setServerStages([]);
+    setHierarchyLoading(false); setHierarchyError(''); setUseServerHierarchy(false);
     onClose();
   };
 
@@ -182,6 +236,22 @@ export default function AddTaskModal({
     handleClose();
   };
 
+  const handleOpenSelectedStepInTopics = () => {
+    if (!canProceed || blocked) return;
+    if (!onOpenProjectTopicStep) {
+      setHierarchyDone(true);
+      return;
+    }
+    const projectName = selectedProject?.name ?? '';
+    onOpenProjectTopicStep({
+      projectId: Number(selectedProjectId),
+      projectName,
+      planningTopicId: Number(selectedPlanningTopicId),
+      stageId: Number(selectedStageId),
+    });
+    handleClose();
+  };
+
   if (!isOpen) return null;
 
   const modalTitle = hierarchyDone && selectedStage
@@ -192,7 +262,7 @@ export default function AddTaskModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/50" onClick={handleClose} />
 
-      <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-2xl mx-4 flex flex-col max-h-[92vh]" dir="rtl">
+      <div className="relative modal-shell dark-surface bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-2xl mx-4 flex flex-col max-h-[92vh]" dir="rtl">
 
         {/* ── Header ── */}
         <div className="flex items-center justify-between px-5 py-3.5 bg-emerald-500 rounded-t-xl flex-shrink-0">
@@ -205,7 +275,7 @@ export default function AddTaskModal({
         {/* ── Hierarchy step (שלב א׳) ── */}
         {!hierarchyDone && (
           <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
-            <p className="text-sm text-gray-500 mb-2">שיוך היררכי — בחר פרויקט, נושא תכנון ושלב</p>
+            <p className="text-sm text-gray-500 mb-2"> בחר פרויקט, נושא תכנון ושלב</p>
 
             <FormField label="פרויקט *">
               <StyledSelect
@@ -215,14 +285,27 @@ export default function AddTaskModal({
                 placeholder="בחר פרויקט..."
               />
             </FormField>
+            {hierarchyError && (
+              <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                {hierarchyError}
+              </div>
+            )}
 
             <FormField label="נושא תכנון *">
               <StyledSelect
                 value={selectedPlanningTopicId}
                 onChange={v => { setSelectedPlanningTopicId(v === '' ? '' : Number(v)); setSelectedStageId(''); }}
                 options={filteredTopics.map(t => ({ value: t.id, label: t.name }))}
-                placeholder={selectedProjectId === '' ? 'בחר פרויקט תחילה' : noTopics ? 'אין נושאי תכנון' : 'בחר נושא תכנון...'}
-                disabled={selectedProjectId === '' || noTopics}
+                placeholder={
+                  selectedProjectId === ''
+                    ? 'בחר פרויקט תחילה'
+                    : hierarchyLoading
+                      ? 'טוען נושאי תכנון...'
+                      : noTopics
+                        ? 'אין נושאי תכנון'
+                        : 'בחר נושא תכנון...'
+                }
+                disabled={selectedProjectId === '' || hierarchyLoading || noTopics}
               />
             </FormField>
 
@@ -231,8 +314,16 @@ export default function AddTaskModal({
                 value={selectedStageId}
                 onChange={v => setSelectedStageId(v === '' ? '' : Number(v))}
                 options={filteredStages.map(s => ({ value: s.id, label: s.name }))}
-                placeholder={selectedPlanningTopicId === '' ? 'בחר נושא תכנון תחילה' : noStages ? 'אין שלבים' : 'בחר שלב...'}
-                disabled={selectedPlanningTopicId === '' || noStages}
+                placeholder={
+                  selectedPlanningTopicId === ''
+                    ? 'בחר נושא תכנון תחילה'
+                    : hierarchyLoading
+                      ? 'טוען שלבים...'
+                      : noStages
+                        ? 'אין שלבים'
+                        : 'בחר שלב...'
+                }
+                disabled={selectedPlanningTopicId === '' || hierarchyLoading || noStages}
               />
             </FormField>
 
@@ -245,7 +336,7 @@ export default function AddTaskModal({
 
             <div className="flex gap-3 pt-2">
               <button
-                onClick={() => setHierarchyDone(true)}
+                onClick={handleOpenSelectedStepInTopics}
                 disabled={!canProceed || blocked}
                 className="flex-1 bg-emerald-500 hover:bg-emerald-600 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed text-white font-semibold py-2.5 rounded-lg transition-colors text-sm"
               >
@@ -288,7 +379,7 @@ export default function AddTaskModal({
                   <StyledSelect value={priority} onChange={v => setPriority(v)}
                     options={PRIORITIES.map(p => ({ value: p, label: p }))} />
                 </FormField>
-                <FormField label="תלוי בשלב">
+                <FormField label="תלוי שלב">
                   <div className="flex items-center h-[38px]">
                     <button
                       onClick={() => setDependsOnTask(!dependsOnTask)}
@@ -305,23 +396,23 @@ export default function AddTaskModal({
                   </div>
                 </FormField>
                 <FormField label="שעות עבודה">
-                  <StyledInput type="number" value={workHours} onChange={e => handleHoursChange(parseFloat(e.target.value) || 0)} min={0} step={0.5} />
+                  <NumberInput value={workHours} onChange={v => handleHoursChange(v)} min={0} step={0.5} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:ring-2 focus:ring-emerald-400 focus:outline-none" />
                 </FormField>
               </div>
 
               {/* Row: duration / dates / work days */}
               <div className="grid grid-cols-4 gap-3">
                 <FormField label="משך זמן">
-                  <StyledInput type="number" value={durationDays} onChange={e => setDurationDays(parseFloat(e.target.value) || 0)} min={0} />
+                  <NumberInput value={durationDays} onChange={v => setDurationDays(v)} min={0} integerOnly className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:ring-2 focus:ring-emerald-400 focus:outline-none" />
                 </FormField>
                 <FormField label="מתאריך">
-                  <StyledInput type="date" value={startDate} onChange={e => setStartDate(e.target.value)} />
+                  <DateInput value={startDate} onChange={setStartDate} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:ring-2 focus:ring-emerald-400 focus:outline-none" />
                 </FormField>
                 <FormField label="עד תאריך">
-                  <StyledInput type="date" value={endDate} onChange={e => setEndDate(e.target.value)} />
+                  <DateInput value={endDate} onChange={setEndDate} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:ring-2 focus:ring-emerald-400 focus:outline-none" />
                 </FormField>
                 <FormField label="ימי עבודה">
-                  <StyledInput type="number" value={workDays} onChange={e => handleDaysChange(parseFloat(e.target.value) || 0)} min={0} step={0.5} />
+                  <NumberInput value={workDays} onChange={v => handleDaysChange(v)} min={0} step={0.5} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:ring-2 focus:ring-emerald-400 focus:outline-none" />
                 </FormField>
               </div>
 
@@ -361,8 +452,8 @@ export default function AddTaskModal({
                     <ReadonlyField value={selectedStage?.name ?? ''} />
                   </FormField>
                   <FormField label="% מהשלב">
-                    <StyledInput type="number" value={percentOfStage}
-                      onChange={e => handlePercentChange(parseFloat(e.target.value) || 0)} min={0} max={100} step={0.5} />
+                    <NumberInput value={percentOfStage}
+                      onChange={v => handlePercentChange(v)} min={0} max={100} step={0.5} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:ring-2 focus:ring-emerald-400 focus:outline-none" />
                   </FormField>
                 </div>
               )}
@@ -464,25 +555,25 @@ function StyledSelect({ value, onChange, options, placeholder, disabled }: {
   );
 }
 
-function StyledInput({ type = 'text', value, onChange, min, max, step, className = '' }: {
-  type?: string;
-  value: string | number;
-  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  min?: number;
-  max?: number;
-  step?: number;
-  className?: string;
-}) {
-  return (
-    <input
-      type={type}
-      value={value}
-      onChange={onChange}
-      min={min} max={max} step={step}
-      className={`w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:ring-2 focus:ring-emerald-400 focus:outline-none ${className}`}
-    />
-  );
-}
+// function StyledInput({ type = 'text', value, onChange, min, max, step, className = '' }: {
+//   type?: string;
+//   value: string | number;
+//   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+//   min?: number;
+//   max?: number;
+//   step?: number;
+//   className?: string;
+// }) {
+//   return (
+//     <input
+//       type={type}
+//       value={value}
+//       onChange={onChange}
+//       min={min} max={max} step={step}
+//       className={`w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:ring-2 focus:ring-emerald-400 focus:outline-none ${className}`}
+//     />
+//   );
+// }
 
 function ReadonlyField({ value, className = '' }: { value: string; className?: string }) {
   return (

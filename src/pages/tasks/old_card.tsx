@@ -508,7 +508,7 @@ const activeLinks = employeeLinks.filter(l => !l.isDeleted);
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-gray-600 mb-1">תלוי בשלב</label>
+                <label className="block text-xs font-bold text-gray-600 mb-1">תלוי שלב</label>
                 <div className={`px-3 py-2 rounded-lg border-2 text-center font-medium text-sm ${editedTask.dependsOnStepID ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-gray-50 text-gray-600 border-gray-200'}`}>{editedTask.dependsOnStepID ? 'כן' : 'לא'}</div>
               </div>
 

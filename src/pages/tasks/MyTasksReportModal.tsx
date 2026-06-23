@@ -163,7 +163,7 @@ function buildReportPdfPageHtml(
           </table>
         </div>
       </div>
-      <p style="font-size:10px;color:#9ca3af;margin:10px 0 0 0;text-align:center;line-height:1.4;">נוצר ממערכת TaskIt</p>
+      <p style="font-size:10px;color:#9ca3af;margin:10px 0 0 0;text-align:center;line-height:1.4;">נוצר ממערכת PlanIt</p>
     </div>
   `;
 }
@@ -371,7 +371,7 @@ export default function MyTasksReportModal({
       wb.Props = {
         Title: reportTitle,
         Subject: `${reportTitle} (${rowCount} שורות)`,
-        Author: 'TaskIt',
+        Author: 'PlanIt',
         CreatedDate: created
       };
 
@@ -438,13 +438,13 @@ export default function MyTasksReportModal({
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <button type="button" className="absolute inset-0 bg-black/40" aria-label="סגירה" onClick={onClose} />
       <div
-        className="relative z-10 w-full max-w-lg rounded-2xl border border-gray-200 bg-white shadow-2xl"
+        className="relative z-10 w-full max-w-lg modal-shell dark-surface bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-2xl"
         role="dialog"
         aria-labelledby="report-modal-title"
       >
-        <div className="flex items-start justify-between border-b border-gray-100 px-5 py-4">
+        <div className="flex items-start justify-between border-b border-gray-100 dark:border-gray-700 px-5 py-4">
           <div>
-            <h2 id="report-modal-title" className="text-lg font-bold text-gray-900">
+            <h2 id="report-modal-title" className="text-lg font-bold text-gray-900 dark:text-white">
               {reportTitle}
             </h2>
             <p className="mt-1 text-sm text-gray-500">{rowCount} שורות (לפי מסננים נוכחיים)</p>
@@ -452,7 +452,7 @@ export default function MyTasksReportModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-2 text-gray-500 hover:bg-gray-100"
+            className="rounded-lg p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
             aria-label="סגור"
           >
             <X size={20} />

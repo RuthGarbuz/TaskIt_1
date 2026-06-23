@@ -3,16 +3,17 @@ import { MessageSquare, X, Edit2, Trash2, Check } from 'lucide-react';
 import type { TaskChatMessage, TaskReview } from '../../Data/projectsData';
 import { getEmployees, type EmployeeBasic } from '../../services/templatesSettingServices';
 import authService from '../../services/authService';
-import { deletePlanningChat, getChatData, insertChatAsync, updatePlanningChat } from '../../services/chatService';
+import { deletePlanningChat, getChatData, insertChatAsync, updatePlanningChat, updateNotificationReadState } from '../../services/chatService';
 
 interface ChatModalProps {
   task: TaskReview;
   setTask: React.Dispatch<React.SetStateAction<TaskReview | null>>;
   onClose: () => void;
   initialMessages?: TaskChatMessage[];
+  readOnly?: boolean;
 }
 
-export default function ChatModal({ task, onClose, setTask, initialMessages }: ChatModalProps) {
+export default function ChatModal({ task, onClose, setTask, initialMessages, readOnly = false }: ChatModalProps) {
   const [messages, setMessages] = useState<TaskChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -30,6 +31,20 @@ export default function ChatModal({ task, onClose, setTask, initialMessages }: C
 
   const inputRef = useRef<HTMLInputElement>(null);
   const currentUserId = authService.getCurrentUser()?.id ?? 0;
+
+  // ─── Mark notification read when opening chat ──────────────────────────────
+  useEffect(() => {
+    // Same behavior as `Header.tsx` when opening a notification: mark as read.
+    // Backend expects `taskChatId`; in our UI we consistently pass the entity id.
+    // If the API treats this differently, it will no-op and we'll keep logging.
+    (async () => {
+      try {
+        await updateNotificationReadState(task.id, !task.isPlanningSte, true, task.id);
+      } catch (e) {
+        console.error('Error updating notification read state on chat open:', e);
+      }
+    })();
+  }, []);
 
   // ─── Load chat ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -58,8 +73,8 @@ export default function ChatModal({ task, onClose, setTask, initialMessages }: C
   }, [task.id, initialMessages]);
 
   useEffect(() => {
-    if (!loading) setTimeout(() => inputRef.current?.focus(), 50);
-  }, [loading]);
+    if (!loading && !readOnly) setTimeout(() => inputRef.current?.focus(), 50);
+  }, [loading, readOnly]);
 
   // ─── Load employees lazily ─────────────────────────────────────────────────
   const ensureEmployeesLoaded = async () => {
@@ -204,7 +219,7 @@ export default function ChatModal({ task, onClose, setTask, initialMessages }: C
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+      <div className="modal-shell dark-surface bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-3xl max-h-[85vh] flex flex-col">
 
         {/* Header */}
         <div className="bg-gradient-to-r from-blue-500 to-purple-500 px-6 py-4 rounded-t-xl flex items-center justify-between">
@@ -221,13 +236,13 @@ export default function ChatModal({ task, onClose, setTask, initialMessages }: C
         </div>
 
         {/* Messages */}
-        <div className="flex-1 p-6 overflow-y-auto bg-gray-50">
+        <div className="flex-1 p-6 overflow-y-auto bg-gray-50 dark:bg-gray-900">
           <div className="space-y-4">
 
-            <div className="bg-white rounded-lg p-4 shadow-sm border border-gray-200">
-              <p className="text-sm text-gray-600 mb-2">💬 אזור הצ'אט של המשימה</p>
-              <div className="text-xs text-gray-500 bg-blue-50 p-3 rounded">
-                <strong>סטטוס פרויקט:</strong> {task.projectName}
+            <div className="dark-surface bg-white dark:bg-gray-700 rounded-lg p-4 shadow-sm border border-gray-200 dark:border-gray-600">
+              <p className="text-sm text-gray-600 dark:text-gray-300 mb-2">💬 אזור הצ'אט של המשימה</p>
+              <div className="bright-surface text-xs text-gray-500 bg-blue-50 p-3 rounded">
+                <strong>שם פרויקט:</strong> {task.projectName}
               </div>
             </div>
 
@@ -240,7 +255,7 @@ export default function ChatModal({ task, onClose, setTask, initialMessages }: C
             {!loading && !error && messages.length > 0 && (
               <div className="space-y-3">
                 {messages.map(msg => (
-                  <div key={msg.id} className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm">
+                  <div key={msg.id} className="dark-surface bg-white dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600 p-4 shadow-sm">
                     <div className="flex items-start gap-3">
                       <div className="w-10 h-10 rounded-full bg-gradient-to-r from-pink-400 to-purple-400 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
                         {msg.senderName?.[0] ?? '?'}
@@ -251,7 +266,7 @@ export default function ChatModal({ task, onClose, setTask, initialMessages }: C
                             <span className="font-semibold text-gray-900">{msg.senderName}</span>
                             <span className="text-sm text-gray-500">{new Date(msg.createDate).toLocaleString('he-IL')}</span>
                           </div>
-                          {msg.senderID === currentUserId && (
+                          {!readOnly && msg.senderID === currentUserId && (
                             <div className="flex items-center gap-1">
                               <button onClick={() => { setEditingId(msg.id); setEditingText(msg.message); }} className="p-1 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded transition-all" title="ערוך הודעה">
                                 <Edit2 size={13} />
@@ -288,7 +303,7 @@ export default function ChatModal({ task, onClose, setTask, initialMessages }: C
         </div>
 
         {/* Input area */}
-        <div className="border-t border-gray-200 p-4 bg-white rounded-b-xl">
+        {!readOnly && <div className="border-t border-gray-200 dark:border-gray-700 p-4 bg-white dark:bg-gray-800 rounded-b-xl">
 
           {/* Selected receivers badges */}
           {selectedReceivers.length > 0 && (
@@ -311,9 +326,9 @@ export default function ChatModal({ task, onClose, setTask, initialMessages }: C
           {/* Mention dropdown + input */}
           <div className="relative">
             {showMention && filteredEmployees.length > 0 && (
-              <div className="absolute bottom-full mb-1 right-0 w-64 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden">
-                <div className="px-3 py-2 bg-gray-50 border-b border-gray-100">
-                  <span className="text-xs font-medium text-gray-500">בחר עובד לשליחה פרטית</span>
+              <div className="absolute bottom-full mb-1 right-0 w-64 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl shadow-lg z-50 overflow-hidden">
+                <div className="px-3 py-2 bg-gray-50 dark:bg-gray-800 border-b border-gray-100 dark:border-gray-600">
+                  <span className="text-xs font-medium text-gray-500 dark:text-gray-300">בחר עובד לשליחה פרטית</span>
                 </div>
                 <ul className="max-h-48 overflow-y-auto py-1">
                   {filteredEmployees.map((emp, idx) => (
@@ -321,13 +336,13 @@ export default function ChatModal({ task, onClose, setTask, initialMessages }: C
                       key={emp.id}
                       onClick={() => selectEmployee(emp)}
                       className={`flex items-center gap-2.5 px-3 py-2 cursor-pointer transition-colors ${
-                        idx === mentionIndex ? 'bg-blue-50' : 'hover:bg-gray-50'
+                        idx === mentionIndex ? 'bg-blue-50 dark:bg-blue-900/40' : 'hover:bg-gray-50 dark:hover:bg-gray-600'
                       }`}
                     >
-                      <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-medium flex-shrink-0">
+                      <div className="w-7 h-7 rounded-full bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-200 flex items-center justify-center text-xs font-medium flex-shrink-0">
                         {emp.name[0]}
                       </div>
-                      <span className={`text-sm ${idx === mentionIndex ? 'text-blue-700 font-medium' : 'text-gray-700'}`}>
+                      <span className={`text-sm ${idx === mentionIndex ? 'text-blue-700 dark:text-blue-200 font-medium' : 'text-gray-700 dark:text-gray-200'}`}>
                         {emp.name}
                       </span>
                     </li>
@@ -344,18 +359,18 @@ export default function ChatModal({ task, onClose, setTask, initialMessages }: C
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
                 placeholder="כתוב הודעה... (@ לשליחה לעובד ספציפי)"
-                className="flex-1 px-4 py-2.5 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                className="flex-1 px-4 py-2.5 border-2 border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
               />
               <button
                 onClick={handleSendMessage}
                 disabled={!chatMessage.trim() || loading}
-                className="px-6 py-2.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 font-bold transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-6 py-2.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-500 font-bold transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 שלח
               </button>
             </div>
           </div>
-        </div>
+        </div>}
 
       </div>
     </div>

@@ -57,7 +57,7 @@ function SortableTh({ sortKey, label, className, sort, onSort }: {
 
 export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksProps) {
   const [viewMode, setViewMode] = useState<'list' | 'gantt'>('list');
-  const [ganttTimeframe, setGanttTimeframe] = useState<'weekly' | 'monthly'>('weekly');
+  const [ganttTimeframe, setGanttTimeframe] = useState<'weekly' | 'monthly' | 'yearly'>('weekly');
   const [ganttTask, setGanttTask] = useState<TaskReview[]>([]);
   const [showViewModal, setShowViewModal] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);

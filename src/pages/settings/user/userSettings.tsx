@@ -1,21 +1,30 @@
-import { useState, useEffect } from 'react';
-import { Save, X, Search, Shield, User as UserIcon } from 'lucide-react';
+import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
+import { Save, X, Shield, User as UserIcon } from 'lucide-react';
+import SearchInput from '../../shared/SearchInput';
 import { getUsersList, saveUsersPermissions } from '../../../services/userService';
 import type { UserListItem } from '../../../Data/settingsData';
 import MessageBox from '../../shared/MessageBox';
+import type { SettingsTabHandle } from '../settingsTabHandle';
+import { BRIGHT_SURFACE } from '../../tasks/taskViewTheme';
+import {
+  SETTINGS_BTN_SECONDARY,
+  SETTINGS_TABLE_HEAD,
+  SETTINGS_TABLE_ROW,
+  SETTINGS_TITLE,
+} from '../settingsTheme';
 
 const ROLE_OPTIONS: { value: number; label: string; color: string }[] = [
-  { value: 1,   label: 'מנהל',      color: 'bg-red-100 text-red-700 border-red-200'        },
-  { value: 2,   label: 'עסקי',       color: 'bg-blue-100 text-blue-700 border-blue-200'     },
-  { value: 3,   label: 'ראש צוות',   color: 'bg-purple-100 text-purple-700 border-purple-200'},
-  { value: 4,   label: 'עובד',        color: 'bg-gray-100 text-gray-700 border-gray-200'    },
+  { value: 1,   label: 'מנהל',      color: `${BRIGHT_SURFACE} bg-red-100 text-red-700 border-red-200`        },
+  { value: 2,   label: 'עסקי',       color: `${BRIGHT_SURFACE} bg-blue-100 text-blue-700 border-blue-200`     },
+  { value: 3,   label: 'ראש צוות',   color: `${BRIGHT_SURFACE} bg-purple-100 text-purple-700 border-purple-200`},
+  { value: 4,   label: 'עובד',        color: `${BRIGHT_SURFACE} bg-gray-100 text-gray-700 border-gray-200`    },
 ];
 
 const getRoleOption = (role: number) => ROLE_OPTIONS.find(r => r.value === role)!;
 
 const DEMO_USERS: UserListItem[] = [];
 
-export default function UsersSettings() {
+const UsersSettings = forwardRef<SettingsTabHandle>((_props, ref) => {
   const [users, setUsers] = useState<UserListItem[]>(DEMO_USERS);
   const [originalUsers, setOriginalUsers] = useState<UserListItem[]>(DEMO_USERS);
   const [searchQuery, setSearchQuery] = useState('');
@@ -53,45 +62,61 @@ export default function UsersSettings() {
     ));
   };
 
-  const handleSave = async () => {
+  const getChangedUsers = () => {
+    const originalMap = new Map(originalUsers.map(u => [u.id, u]));
+    return users.filter(u => {
+      const original = originalMap.get(u.id);
+      if (!original) return true;
+      return original.permissionID !== u.permissionID;
+    });
+  };
+
+  const persistSave = async (showFeedback: boolean) => {
+    const changedUsers = getChangedUsers();
+    if (changedUsers.length === 0) {
+      return;
+    }
+
     try {
       setIsSaving(true);
-      const originalMap = new Map(originalUsers.map(u => [u.id, u]));
-      const changedUsers = users.filter(u => {
-        const original = originalMap.get(u.id);
-        if (!original) return true;
-        return original.permissionID !== u.permissionID;
-      });
-
-//       const deletedUsers = originalUsers.filter(u => !users.some(curr => curr.id === u.id));
-// || deletedUsers.length > 0
-      if (changedUsers.length > 0) {
-        const save = await saveUsersPermissions(
-          changedUsers.map(u => ({ id: u.id, permissionID: u.permissionID }))
-        );
-        if (save) {
-          setMessageBox({
-            isOpen: true,
-            title: 'שמירה הצליחה',
-            message: 'ההגדרות נשמרו בהצלחה!',
-            type: 'success'
-          });
-        }
+      const save = await saveUsersPermissions(
+        changedUsers.map(u => ({ id: u.id, permissionID: u.permissionID }))
+      );
+      if (!save) {
+        throw new Error('Failed to save users');
       }
-
       setOriginalUsers(users);
+      if (showFeedback) {
+        setMessageBox({
+          isOpen: true,
+          title: 'שמירה הצליחה',
+          message: 'ההגדרות נשמרו בהצלחה!',
+          type: 'success',
+        });
+      }
     } catch (error) {
       console.error('Failed to save users:', error);
-      setMessageBox({
-        isOpen: true,
-        title: 'שגיאה',
-        message: 'שגיאה בשמירת השינויים',
-        type: 'error'
-      });
+      if (showFeedback) {
+        setMessageBox({
+          isOpen: true,
+          title: 'שגיאה',
+          message: 'שגיאה בשמירת השינויים',
+          type: 'error',
+        });
+      }
+      throw error;
     } finally {
       setIsSaving(false);
     }
   };
+
+  useImperativeHandle(ref, () => ({
+    hasUnsavedChanges: () => getChangedUsers().length > 0,
+    save: () => persistSave(false),
+    reload: loadUsers,
+  }));
+
+  const handleSave = () => void persistSave(true);
 
   const handleCancel = () => {
     setUsers(originalUsers);
@@ -108,14 +133,14 @@ export default function UsersSettings() {
             <UserIcon size={18} className="text-white" />
           </div>
           <div>
-            <h2 className="text-base sm:text-lg font-bold text-gray-800">ניהול משתמשים</h2>
-            <p className="text-sm text-gray-500">{users.length} משתמשים במערכת</p>
+            <h2 className={`!text-lg sm:!text-xl ${SETTINGS_TITLE}`}>ניהול משתמשים</h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400">{users.length} משתמשים במערכת</p>
           </div>
         </div>
         <div className="flex gap-3">
           <button
             onClick={handleCancel}
-            className="flex items-center gap-2 px-5 py-2.5 border-2 border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-semibold text-sm transition-all"
+            className={SETTINGS_BTN_SECONDARY}
           >
             <X size={18} />
             ביטול
@@ -123,7 +148,7 @@ export default function UsersSettings() {
           <button
             onClick={handleSave}
             disabled={isSaving}
-            className="flex items-center gap-2 px-6 py-2.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 font-semibold shadow-md text-sm w-full sm:w-auto disabled:bg-gray-400 disabled:cursor-not-allowed"
+            className="settings-header-btn flex items-center gap-2 px-6 py-2.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 font-semibold shadow-md text-sm w-full sm:w-auto disabled:bg-gray-400 disabled:cursor-not-allowed"
           >
             <Save size={18} />
             {isSaving ? 'שומר...' : 'שמור שינויים'}
@@ -132,14 +157,13 @@ export default function UsersSettings() {
       </div>
 
       {/* Search */}
-      <div className="relative max-w-sm">
-        <Search size={15} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-        <input
-          type="text"
+      <div className="max-w-sm">
+        <SearchInput
           value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
+          onChange={setSearchQuery}
           placeholder="חיפוש לפי שם או שם משתמש..."
-          className="w-full pr-10 pl-4 py-2 border-2 border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 transition-all"
+          iconSize={15}
+          className="text-sm border-2 border-gray-200 focus:ring-indigo-400 focus:border-indigo-400 transition-all"
         />
       </div>
 
@@ -154,9 +178,9 @@ export default function UsersSettings() {
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <div className="task-group-card overflow-hidden">
         <table className="w-full">
-          <thead className="bg-gray-50 border-b border-gray-200">
+          <thead className={SETTINGS_TABLE_HEAD}>
             <tr>
               <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 w-14">#</th>
               <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 min-w-[160px]">שם עובד</th>
@@ -172,7 +196,7 @@ export default function UsersSettings() {
               return (
                 <tr
                   key={user.id}
-                  className="transition-colors hover:bg-gray-50"
+                  className={SETTINGS_TABLE_ROW}
                 >
                   {/* # */}
                   <td className="px-4 py-3">
@@ -289,4 +313,8 @@ export default function UsersSettings() {
 
     </div>
   );
-}
+});
+
+UsersSettings.displayName = 'UsersSettings';
+
+export default UsersSettings;

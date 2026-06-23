@@ -1,4 +1,12 @@
-import type { HourReportList, HourReportProject, HourReportQuery, HoursReport, HourReportStep } from '../Data/HoursReportData';
+import type {
+  HourReportList,
+  HourReportPlanningSubject,
+  HourReportProject,
+  HourReportQuery,
+  HoursReport,
+  HourReportStep,
+  PlanningHierarchyByProjectResult,
+} from '../Data/HoursReportData';
 import authService from './authService';
 
 
@@ -85,13 +93,57 @@ export const getHourReportProjects = async (isActive?: boolean | null, isClosed?
   }
 };
 
-export const getHourReportStepsByProjectId = async (
+const asRecord = (v: unknown): Record<string, unknown> | null =>
+  v != null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+
+const readSubjects = (raw: unknown): HourReportPlanningSubject[] => {
+  const root = asRecord(raw);
+  const arr = (root?.subjects ?? root?.Subjects) as unknown;
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .map((row): HourReportPlanningSubject | null => {
+      const r = asRecord(row);
+      if (!r) return null;
+      const id = Number(r.id ?? r.ID ?? 0);
+      const name = String(r.name ?? r.Name ?? '').trim();
+      if (!Number.isFinite(id) || id <= 0) return null;
+      return { id, name };
+    })
+    .filter((x): x is HourReportPlanningSubject => x != null);
+};
+
+const readStepItems = (raw: unknown): HourReportStep[] => {
+  const root = asRecord(raw);
+  const arr = (root?.items ?? root?.Items) as unknown;
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .map((row): HourReportStep | null => {
+      const r = asRecord(row);
+      if (!r) return null;
+      const id = Number(r.id ?? r.ID ?? 0);
+      const name = String(r.name ?? r.Name ?? '').trim();
+      const isStep = r.isPlanningStep ?? r.IsPlanningStep;
+      const isPlanningStep = typeof isStep === 'boolean' ? isStep : String(isStep).toLowerCase() === 'true';
+      if (!Number.isFinite(id) || id <= 0) return null;
+      const psRaw = r.planningSubjectId ?? r.PlanningSubjectID ?? r.planningSubjectID;
+      const psNum = psRaw != null && psRaw !== '' ? Number(psRaw) : NaN;
+      const planningSubjectId =
+        Number.isFinite(psNum) && psNum > 0 ? psNum : undefined;
+      return { id, name, isPlanningStep, ...(planningSubjectId != null ? { planningSubjectId } : {}) };
+    })
+    .filter((x): x is HourReportStep => x != null);
+};
+
+/**
+ * Loads planning subjects and step/task rows for the hour-report flow
+ * (`POST /HourReport/planning-hierarchy` → `GetPlanningHierarchyByProjectIdAsync`).
+ */
+export const getPlanningHierarchyByProjectId = async (
   projectId: number,
   isClosed?: boolean | null,
-): Promise<HourReportStep[]> => {
+): Promise<PlanningHierarchyByProjectResult> => {
   try {
     const user = getAuthenticatedUser();
-
     const payload = {
       database: user.dataBase,
       employeeID: user.id,
@@ -99,20 +151,55 @@ export const getHourReportStepsByProjectId = async (
       isClosed: isClosed ?? null,
     } as const;
 
-    const endpoint = buildEndpoint(user.urlConnection, '/HourReport/GetHourReportSteps');
+    const endpoint = buildEndpoint(user.urlConnection, '/HourReport/planning-hierarchy');
     const response = await authService.makeAuthenticatedRequest(endpoint, buildPostOptions(payload));
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Failed to fetch hour report steps (${response.status}): ${errorText || response.statusText}`);
+      throw new Error(
+        `Failed to fetch planning hierarchy (${response.status}): ${errorText || response.statusText}`,
+      );
     }
 
-    return await response.json();
+    const raw: unknown = await response.json();
+    return {
+      subjects: readSubjects(raw),
+      items: readStepItems(raw),
+    };
   } catch (error) {
-    console.error('Error fetching hour report steps:', error);
+    console.error('Error fetching planning hierarchy by project:', error);
     throw error;
   }
 };
+
+// export const getHourReportStepsByProjectId = async (
+//   projectId: number,
+//   isClosed?: boolean | null,
+// ): Promise<HourReportStep[]> => {
+//   try {
+//     const user = getAuthenticatedUser();
+
+//     const payload = {
+//       database: user.dataBase,
+//       employeeID: user.id,
+//       projectID: projectId,
+//       isClosed: isClosed ?? null,
+//     } as const;
+
+//     const endpoint = buildEndpoint(user.urlConnection, '/HourReport/GetHourReportSteps');
+//     const response = await authService.makeAuthenticatedRequest(endpoint, buildPostOptions(payload));
+
+//     if (!response.ok) {
+//       const errorText = await response.text();
+//       throw new Error(`Failed to fetch hour report steps (${response.status}): ${errorText || response.statusText}`);
+//     }
+
+//     return await response.json();
+//   } catch (error) {
+//     console.error('Error fetching hour report steps:', error);
+//     throw error;
+//   }
+// };
 
 export const insertHourReport = async (report: HoursReport, projectId: number, isTask: boolean): Promise<boolean> => {
   try {
@@ -239,7 +326,8 @@ export const deleteTaskOrStageAsync = async (
 export default {
   getHourReports,
   getHourReportProjects,
-  getHourReportStepsByProjectId,
+ // getHourReportStepsByProjectId,
+  getPlanningHierarchyByProjectId,
   insertHourReport,
   updateHourReport,
   deleteHourReport,

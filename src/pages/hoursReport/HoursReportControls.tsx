@@ -1,4 +1,6 @@
-import { Search, Filter, LayoutGrid } from 'lucide-react';
+import { TASK_CONTROLS_PANEL, TASK_CTRL_BTN } from '../tasks/taskViewTheme';
+import { Filter, LayoutGrid } from 'lucide-react';
+import SearchInput from '../shared/SearchInput';
 
 //type ViewMode = 'date' | 'employee' | 'project';
 
@@ -18,27 +20,24 @@ export default function HoursReportControls({
   onShowFilterModal,
 }: HoursReportControlsProps) {
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6">
+    <div className={TASK_CONTROLS_PANEL}>
       <div className="flex items-center gap-4 flex-wrap">
 
         {/* Search - takes most space */}
         <div className="flex-1 min-w-[220px]">
-          <div className="relative">
-            <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={e => onSearchChange(e.target.value)}
-              placeholder="חיפוש לפי משימה, שלב, פרויקט, עובד..."
-              className="w-full pr-10 pl-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
-            />
-          </div>
+          <SearchInput
+            value={searchQuery}
+            onChange={onSearchChange}
+            placeholder="חיפוש לפי משימה, שלב, פרויקט, עובד..."
+            iconSize={18}
+            className="text-sm focus:ring-teal-500"
+          />
         </div>
 
         {/* View button */}
         <button
           onClick={onShowViewModal}
-          className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors border border-gray-300 font-medium text-sm"
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors font-medium text-sm ${TASK_CTRL_BTN}`}
         >
           <LayoutGrid size={17} />
           <span>תצוגה</span>
@@ -50,7 +49,7 @@ export default function HoursReportControls({
           className={`relative flex items-center gap-2 px-4 py-2 rounded-lg transition-colors border font-medium text-sm ${
             activeFiltersCount > 0
               ? 'bg-teal-500 text-white border-teal-600'
-              : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300'
+              : `${TASK_CTRL_BTN}`
           }`}
         >
           <Filter size={17} />

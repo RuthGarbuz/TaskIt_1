@@ -1,12 +1,18 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import {
-  Search, Calendar, ChevronLeft, ChevronRight,
+  Calendar, ChevronLeft, ChevronRight,
   Users, TrendingUp, BarChart3, Filter, X, RefreshCw, Loader2, ChevronUp, ChevronDown, ChevronsUpDown,
 } from 'lucide-react';
 import {
   getWeeklyWorkload, getMonthlyWorkload,
   type WeeklyWorkloadResult, type MonthlyWorkloadResult,
 } from '../../services/workloadService';
+import { DateInput } from '../shared/DateInput';
+import SearchInput from '../shared/SearchInput';
+import {
+  usePersistedSessionState,
+  isWorkloadViewMode,
+} from '../../hooks/usePersistedSessionState';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -46,6 +52,16 @@ function toDateStr(d: Date): string {
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const day   = String(d.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+function parseInputDate(value: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (![year, month, day].every(n => Number.isFinite(n))) return null;
+  return new Date(year, month - 1, day);
 }
 
 function formatDateHe(d: Date) {
@@ -402,12 +418,33 @@ function MonthlyTable({ employees, colorFn, employeeSortDir, onToggleEmployeeSor
 type ViewMode = 'weekly' | 'monthly';
 
 export default function WorkloadView() {
-  const [viewMode,        setViewMode]        = useState<ViewMode>('weekly');
+  const [viewMode, setViewMode] = usePersistedSessionState<ViewMode>('taskit.ui.workload.viewMode', 'weekly', isWorkloadViewMode);
   const [searchQuery,     setSearchQuery]     = useState('');
-  const [weekRef,         setWeekRef]         = useState(() => getSundayOfWeek(new Date()));
-  const [month,           setMonth]           = useState(new Date().getMonth() + 1);
-  const [year,            setYear]            = useState(new Date().getFullYear());
-  const [colorScheme,     setColorScheme]     = useState<SchemeKey>('default');
+  const [weekRefIso, setWeekRefIso] = usePersistedSessionState(
+    'taskit.ui.workload.weekRef',
+    toDateStr(getSundayOfWeek(new Date())),
+    (v): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v),
+  );
+  const weekRef = useMemo(() => {
+    const d = new Date(`${weekRefIso}T12:00:00`);
+    return Number.isNaN(d.getTime()) ? getSundayOfWeek(new Date()) : getSundayOfWeek(d);
+  }, [weekRefIso]);
+  const setWeekRef = (d: Date) => setWeekRefIso(toDateStr(getSundayOfWeek(d)));
+  const [month, setMonth] = usePersistedSessionState(
+    'taskit.ui.workload.month',
+    new Date().getMonth() + 1,
+    (v): v is number => typeof v === 'number' && v >= 1 && v <= 12,
+  );
+  const [year, setYear] = usePersistedSessionState(
+    'taskit.ui.workload.year',
+    new Date().getFullYear(),
+    (v): v is number => typeof v === 'number' && v >= 1970 && v <= 2100,
+  );
+  const [colorScheme, setColorScheme] = usePersistedSessionState<SchemeKey>(
+    'taskit.ui.workload.colorScheme',
+    'default',
+    (v): v is SchemeKey => typeof v === 'string' && v in COLOR_SCHEMES,
+  );
   const [selectedIds,     setSelectedIds]     = useState<number[]>([]);
   const [weeklySortBy,    setWeeklySortBy]    = useState<'employee' | 'total'>('employee');
   const [employeeSortDir, setEmployeeSortDir] = useState<'asc' | 'desc'>('asc');
@@ -487,20 +524,29 @@ export default function WorkloadView() {
   const toggleEmployee = (id: number) =>
     setSelectedIds(prev => prev.includes(id) ? prev.filter(e => e !== id) : [...prev, id]);
 
-  const weekEnd = new Date(weekRef);
-  weekEnd.setDate(weekRef.getDate() + 4);
-  const weekLabel = `${formatDateHe(weekRef)} - ${formatDateHe(weekEnd)}, ${weekRef.getFullYear()}`;
-
   const prevWeek  = () => { const d = new Date(weekRef); d.setDate(d.getDate() - 7); setWeekRef(d); };
   const nextWeek  = () => { const d = new Date(weekRef); d.setDate(d.getDate() + 7); setWeekRef(d); };
   const todayWeek = () => setWeekRef(getSundayOfWeek(new Date()));
   const prevMonth = () => { if (month === 1) { setMonth(12); setYear(y => y - 1); } else setMonth(m => m - 1); };
   const nextMonth = () => { if (month === 12) { setMonth(1); setYear(y => y + 1); } else setMonth(m => m + 1); };
 
+  const handleWeekDatePick = (value: string) => {
+    const picked = parseInputDate(value);
+    if (!picked) return;
+    setWeekRef(getSundayOfWeek(picked));
+  };
+
+  const handleMonthDatePick = (value: string) => {
+    const picked = parseInputDate(value);
+    if (!picked) return;
+    setMonth(picked.getMonth() + 1);
+    setYear(picked.getFullYear());
+  };
+
   const scheme = COLOR_SCHEMES[colorScheme];
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 py-2 mb-6" dir="rtl">
+    <div className="task-group-card py-2 mb-6" dir="rtl">
 
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-4">
@@ -526,7 +572,14 @@ export default function WorkloadView() {
                 className="px-3 py-1.5 text-xs font-semibold bg-indigo-50 text-indigo-700 rounded-lg hover:bg-indigo-100 border border-indigo-200">
                 היום
               </button>
-              <span className="text-sm font-semibold text-gray-700 min-w-[220px] text-center">{weekLabel}</span>
+              <label className="relative flex items-center min-w-[220px]" title="בחר תאריך">
+                <Calendar size={15} className="absolute right-2 text-indigo-600 pointer-events-none" />
+                <DateInput
+                  value={toDateStr(weekRef)}
+                  onChange={handleWeekDatePick}
+                  className="w-full pr-8 pl-2 py-1.5 text-sm font-semibold text-gray-700 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-400 focus:outline-none text-center"
+                />
+              </label>
               <button onClick={nextWeek} className="p-2 hover:bg-gray-100 rounded-lg">
                 <ChevronLeft size={18} className="text-gray-600" />
               </button>
@@ -538,9 +591,14 @@ export default function WorkloadView() {
               <button onClick={prevMonth} className="p-2 hover:bg-gray-100 rounded-lg">
                 <ChevronRight size={18} className="text-gray-600" />
               </button>
-              <span className="text-base font-bold text-gray-800 min-w-[140px] text-center">
-                {HE_MONTHS[month - 1]} {year}
-              </span>
+              <label className="relative flex items-center min-w-[140px]" title="בחר חודש">
+                <Calendar size={15} className="absolute right-2 text-indigo-600 pointer-events-none" />
+                <DateInput
+                  value={`${year}-${String(month).padStart(2, '0')}-01`}
+                  onChange={handleMonthDatePick}
+                  className="w-full pr-8 pl-2 py-1.5 text-sm font-bold text-gray-800 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-400 focus:outline-none text-center"
+                />
+              </label>
               <button onClick={nextMonth} className="p-2 hover:bg-gray-100 rounded-lg">
                 <ChevronLeft size={18} className="text-gray-600" />
               </button>
@@ -578,13 +636,16 @@ export default function WorkloadView() {
       )}
 
       {/* Controls */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-2">
+      <div className="app-panel dark-surface bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm p-4 mb-2">
         <div className="flex items-center gap-3 flex-wrap ">
           <div className="relative flex-1 min-w-[200px]">
-            <Search size={15} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+            <SearchInput
+              value={searchQuery}
+              onChange={setSearchQuery}
               placeholder="חיפוש עובד..."
-              className="w-full pr-10 pl-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400" />
+              iconSize={15}
+              className="text-sm focus:ring-indigo-400"
+            />
           </div>
 
           <div className="flex items-center gap-3 text-xs">
@@ -618,7 +679,7 @@ export default function WorkloadView() {
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden  ">
+      <div className="app-panel dark-surface bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
         {loading && (
           <div className="flex items-center justify-center py-20 gap-3 text-indigo-500">
             <Loader2 size={24} className="animate-spin" />
@@ -664,54 +725,67 @@ export default function WorkloadView() {
       {/* Notes */}
       <div className="rounded-xl border border-yellow-200 bg-yellow-50" dir="rtl">
         <div className="px-5 py-3 border-b border-yellow-200 flex items-center gap-2">
-          <span className="text-sm font-bold text-yellow-800">💡 הערות</span>
+          <span className="text-sm font-bold text-amber-800">💡 הערות</span>
         </div>
-        <div className="px-6 py-5 space-y-2 text-sm text-gray-700 leading-relaxed">
+        <ul className="px-6 py-5 space-y-2 text-sm text-amber-800 leading-relaxed">
           {[
-            'עומס עבודה מציג את אחוז הניצול של כל עובד ביחס לקיבולת השבועית או החודשית שלו',
-            'הנתונים מחושבים על בסיס שעות משימות מתוכננות מול שעות זמינות לפי ימי עבודה (ראשון–חמישי)',
-            'ניצול מעל 90% מצביע על עובד עמוס מאוד — מומלץ לבדוק חלוקת משימות מחדש',
-            'ניצול מתחת ל-50% מצביע על תת-ניצול — ניתן להקצות משימות נוספות לעובד',
-          ].map((text, i) => (
-            <div key={i} className="flex items-start gap-2">
+            {
+              title: 'חישוב העומס',
+              body: 'אחוז העומס מחושב ומוצג ביחס למשרה המקצועית של העובד (ולא לפי משרה מלאה כללית). לכן, נתון של 99% אינו מצביע על עומס יתר, אלא על ניצול מיטבי של מכסת שעות העבודה המקצועיות שלו.',
+            },
+            {
+              title: 'מדד אחוז ניצול',
+              body: 'הבורד מציג את אחוז ניצול משאבי העובד ביחס לקיבולת השבועית או החודשית המוגדרת לו.',
+            },
+            {
+              title: 'בסיס החישוב',
+              body: 'הנתונים מחושבים אוטומטית על בסיס שעות המשימות המתוכננות, מול שעות העבודה הזמינות של העובד (ימי עבודה: ראשון - חמישי).',
+            },
+            {
+              title: 'אינדיקציית עומס יתר (מעל 99%)',
+              body: 'ניצול של למעלה מ-90% מסמן עובד בעומס גבוה מאוד, וממליץ למנהל לבחון חלוקת משימות מחדש.',
+            },
+            {
+              title: 'אינדיקציית תת-ניצול (מתחת ל-50%)',
+              body: 'ניצול של פחות מ-50% מסמן פניות במכסת השעות של העובד, ומאפשר הקצאת משימות נוספות.',
+            },
+          ].map(({ title, body }) => (
+            <li key={title} className="flex items-start gap-2">
               <span className="text-yellow-500 mt-0.5 flex-shrink-0">•</span>
-              <span>{text}</span>
-            </div>
+              <span><strong>{title}:</strong> {body}</span>
+            </li>
           ))}
-        </div>
+        </ul>
       </div>
 
       {/* Filter Modal */}
       {showFilterModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col" style={{ maxHeight: '80vh' }}>
-            <div className="flex-shrink-0 border-b px-6 py-4 flex items-center justify-between">
-              <h2 className="text-lg font-bold text-gray-800">סינון עובדים</h2>
-              <button onClick={() => setShowFilterModal(false)} className="p-2 hover:bg-gray-100 rounded-lg">
+          <div className="modal-shell dark-surface bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-md flex flex-col" style={{ maxHeight: '80vh' }}>
+            <div className="flex-shrink-0 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-gray-800 dark:text-white">סינון עובדים</h2>
+              <button onClick={() => setShowFilterModal(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-500 dark:text-gray-400">
                 <X size={18} />
               </button>
             </div>
             <div className="flex-shrink-0 px-6 pt-4">
-              <div className="relative">
-                <Search size={15} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input
-                  type="text"
-                  value={filterSearchQuery}
-                  onChange={e => setFilterSearchQuery(e.target.value)}
-                  placeholder="חיפוש עובד בסינון..."
-                  className="w-full pr-10 pl-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400"
-                />
-              </div>
+              <SearchInput
+                value={filterSearchQuery}
+                onChange={setFilterSearchQuery}
+                placeholder="חיפוש עובד בסינון..."
+                iconSize={15}
+                className="text-sm focus:ring-indigo-400"
+              />
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-3">
               {filteredEmployeesInModal.map(emp => (
-                <label key={emp.id} className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded-lg cursor-pointer">
+                <label key={emp.id} className="flex items-center gap-3 p-2 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg cursor-pointer">
                   <input type="checkbox" checked={selectedIds.includes(emp.id)} onChange={() => toggleEmployee(emp.id)}
                     className="w-4 h-4 rounded text-indigo-500" />
-                  <span className="text-sm font-medium text-gray-800">{emp.name}</span>
+                  <span className="text-sm font-medium text-gray-800 dark:text-gray-100">{emp.name}</span>
                 </label>
               ))}
-              {filteredEmployeesInModal.length === 0 && <p className="text-sm text-gray-400 text-center">אין עובדים לסינון</p>}
+              {filteredEmployeesInModal.length === 0 && <p className="text-sm text-gray-400 dark:text-gray-500 text-center">אין עובדים לסינון</p>}
             </div>
             <div className="flex-shrink-0 border-t px-6 py-4 flex gap-3">
               <button onClick={() => setSelectedIds([])}
@@ -726,10 +800,10 @@ export default function WorkloadView() {
       {/* View Modal */}
       {showViewModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col" style={{ maxHeight: '80vh' }}>
-            <div className="flex-shrink-0 border-b px-6 py-4 flex items-center justify-between">
-              <h2 className="text-lg font-bold text-gray-800">תצוגה</h2>
-              <button onClick={() => setShowViewModal(false)} className="p-2 hover:bg-gray-100 rounded-lg">
+          <div className="modal-shell dark-surface bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-md flex flex-col" style={{ maxHeight: '80vh' }}>
+            <div className="flex-shrink-0 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-gray-800 dark:text-white">תצוגה</h2>
+              <button onClick={() => setShowViewModal(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-500 dark:text-gray-400">
                 <X size={18} />
               </button>
             </div>

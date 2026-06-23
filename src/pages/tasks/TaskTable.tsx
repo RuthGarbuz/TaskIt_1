@@ -1,17 +1,48 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Clock, AlertCircle, Eye, MessageSquare, Send, Filter, X, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
 import type { CurrentView } from '../../types/index';
 import { getInitials, getAvatarColor } from '../../Data/tasksData';
-import type { SystemTable, TaskReview } from '../../Data/projectsData';
+import type { SystemTable, TaskReview, TaskStatusCascade } from '../../Data/projectsData';
 import ChatModal from '../tasks/ChatModal';
 import SearchableCheckboxFilter from '../shared/SearchableCheckboxFilter';
 import DateFilter from '../shared/DateFilter';
+import MessageBox from '../shared/MessageBox';
+import {
+  clearStatusMessageBoxFields,
+  createOpenConfirm,
+  createStepStatusSyncConfirm,
+  type StatusMessageBoxState,
+} from '../shared/statusSyncConfirm';
+import PlanningBillRequestModal from './PlanningBillRequestModal';
+import { planTableStatusChange } from './taskStatusChangeRules';
+import { dedupeTaskReviews, taskReviewRowKey } from '../../services/taskService';
+import HorizontalScrollContainer from '../../components/HorizontalScrollContainer';
+import {
+  TASK_FILTER_POPOVER,
+  TASK_HEADER_FILTER_BTN_INACTIVE,
+  TASK_HEADER_TH_HOVER,
+  TASK_SUMMARY_PANEL,
+  TASK_TABLE_HEAD,
+  TASK_TABLE_HEAD_CELL,
+  TASK_TABLE_SHELL,
+  TASK_TABLE_STICKY_CELL,
+} from './taskViewTheme';
+
+export type TaskTableStatusChangeOptions = {
+  updateAllEmployees?: boolean;
+  statusCascade?: TaskStatusCascade | null;
+};
 
 interface TaskTableProps {
   tasks: TaskReview[];
   currentView: CurrentView;
   onTaskComplete: (taskId: number) => void;
-  onTaskStatusChange: (taskId: number, statusId: number, statusName: string) => void;
+  onTaskStatusChange: (
+    taskId: number,
+    statusId: number,
+    statusName: string,
+    options?: TaskTableStatusChangeOptions,
+  ) => void;
   onTaskUrgencyChange: (taskId: number, urgencyId: number, urgencyName: string) => void;
   onTaskSubjectChange: (taskId: number, subject: string) => void;
   onTaskClick: (task: TaskReview) => void;
@@ -39,7 +70,7 @@ function SortableTh({ sortKey, label, className, sort, onSort }: {
   sortKey: SortKey; label: string; className: string; sort: SortState; onSort: (key: SortKey) => void;
 }) {
   return (
-    <th className={`${className} cursor-pointer select-none hover:bg-gray-100 transition-colors`} onClick={() => onSort(sortKey)}>
+    <th className={`${className} cursor-pointer select-none ${TASK_HEADER_TH_HOVER} transition-colors`} onClick={() => onSort(sortKey)}>
       <div className="flex items-center gap-1">
         <span>{label}</span>
         <SortIcon active={sort.key === sortKey} dir={sort.key === sortKey ? sort.dir : null} />
@@ -52,11 +83,11 @@ export default function TaskTable({
   tasks, currentView, onTaskComplete, onTaskStatusChange, onTaskUrgencyChange,
   onTaskSubjectChange, onTaskClick, onTasksUpdate, statuses, priorities, hideProjectColumn = false
 }: TaskTableProps) {
-  const [hoveredTaskId, setHoveredTaskId] = useState<number | null>(null);
   const [editingTaskId, setEditingTaskId] = useState<number | null>(null);
   const [editingSubject, setEditingSubject] = useState('');
   const [showChatModal, setShowChatModal] = useState(false);
   const [chatTask, setChatTask] = useState<TaskReview | null>(null);
+  const [billRequestTask, setBillRequestTask] = useState<TaskReview | null>(null);
   const [openColumnFilter, setOpenColumnFilter] = useState<TaskTableColumnFilterKey | null>(null);
   const [columnFilterSearch, setColumnFilterSearch] = useState({ isClosed: '', project: '', status: '', urgency: '', sender: '' });
   const [columnFilters, setColumnFilters] = useState({
@@ -65,6 +96,47 @@ export default function TaskTable({
     startDateFrom: '', startDateTo: '', endDateFrom: '', endDateTo: ''
   });
   const [sort, setSort] = useState<SortState>({ key: null, dir: null });
+
+  const [messageBox, setMessageBox] = useState<StatusMessageBoxState>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'warning',
+  });
+
+  const closeMessageBox = useCallback(() => {
+    setMessageBox(prev => clearStatusMessageBoxFields(prev));
+  }, []);
+
+  const showMessage = (
+    message: string,
+    title = 'הודעה',
+    type: 'alert' | 'success' | 'error' | 'warning' = 'alert',
+  ) => {
+    setMessageBox({ isOpen: true, title, message, type, confirmText: 'אישור' });
+  };
+
+  const openConfirm = useMemo(() => createOpenConfirm(setMessageBox, closeMessageBox), [closeMessageBox]);
+  const openStepStatusSyncConfirm = useMemo(
+    () => createStepStatusSyncConfirm(setMessageBox, closeMessageBox),
+    [closeMessageBox],
+  );
+
+  const handleTableStatusChange = async (task: TaskReview, nextStatusId: number, statusName: string) => {
+    const view = currentView === 'myTasks' ? 'myTasks' : 'allTasks';
+    const plan = await planTableStatusChange(
+      task,
+      nextStatusId,
+      statusName,
+      tasks,
+      view,
+      openConfirm,
+      openStepStatusSyncConfirm,
+      (message) => showMessage(message, 'אזהרה', 'warning'),
+    );
+    if (!plan.proceed) return;
+    onTaskStatusChange(task.id, nextStatusId, statusName, plan.options);
+  };
 
   const handleSort = (key: SortKey) => {
     setSort(prev => {
@@ -118,17 +190,19 @@ export default function TaskTable({
     return d < today;
   };
 
+  const listTasks = useMemo(() => dedupeTaskReviews(tasks), [tasks]);
+
   const closedStateOptions = useMemo(() => [{ value: 'open', label: 'פתוח' }, { value: 'closed', label: 'סגור' }], []);
-  const projectFilterOptions = useMemo(() => Array.from(new Set(tasks.map(t => t.projectName).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'he')).map(p => ({ value: p, label: p })), [tasks]);
-  const senderFilterOptions = useMemo(() => Array.from(new Set(tasks.map(t => t.senderName).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'he')).map(s => ({ value: s, label: s })), [tasks]);
-  const urgencyFilterOptions = useMemo(() => Array.from(new Set(tasks.map(t => t.urgencyName).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'he')).map(u => ({ value: u, label: u })), [tasks]);
+  const projectFilterOptions = useMemo(() => Array.from(new Set(listTasks.map(t => t.projectName).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'he')).map(p => ({ value: p, label: p })), [listTasks]);
+  const senderFilterOptions = useMemo(() => Array.from(new Set(listTasks.map(t => t.senderName).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'he')).map(s => ({ value: s, label: s })), [listTasks]);
+  const urgencyFilterOptions = useMemo(() => Array.from(new Set(listTasks.map(t => t.urgencyName).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'he')).map(u => ({ value: u, label: u })), [listTasks]);
   const statusFilterOptions = useMemo(() => {
     const map = new Map<number, string>();
-    tasks.forEach(t => { const id = t.statuID ?? 0; const name = t.statusName || statuses.find(s => s.id === id)?.name || `סטטוס ${id}`; if (!map.has(id)) map.set(id, name); });
+    listTasks.forEach(t => { const id = t.statuID ?? 0; const name = t.statusName || statuses.find(s => s.id === id)?.name || `סטטוס ${id}`; if (!map.has(id)) map.set(id, name); });
     return Array.from(map, ([id, name]) => ({ value: id, label: name })).sort((a, b) => a.label.localeCompare(b.label, 'he'));
-  }, [tasks, statuses]);
+  }, [listTasks, statuses]);
 
-  const columnFilteredTasks = useMemo(() => tasks.filter(task => {
+  const columnFilteredTasks = useMemo(() => listTasks.filter(task => {
     const closedState = task.isClosed ? 'closed' : 'open';
     return (
       (columnFilters.closedStates.length === 0 || columnFilters.closedStates.includes(closedState)) &&
@@ -139,7 +213,7 @@ export default function TaskTable({
       matchesDateRange(task.startDate || task.creatDate, columnFilters.startDateFrom, columnFilters.startDateTo) &&
       matchesDateRange(task.endDate, columnFilters.endDateFrom, columnFilters.endDateTo)
     );
-  }), [tasks, columnFilters, hideProjectColumn]);
+  }), [listTasks, columnFilters, hideProjectColumn]);
 
   const sortedTasks = useMemo(() => {
     if (!sort.key || !sort.dir) return columnFilteredTasks;
@@ -175,7 +249,7 @@ export default function TaskTable({
     filterKey: TaskTableColumnFilterKey; label: string; headerClassName: string;
     contentClassName?: string; align?: 'right' | 'center'; sortKey?: SortKey; children: React.ReactNode;
   }) => (
-    <th className={`${headerClassName} relative ${sortKey ? 'cursor-pointer hover:bg-gray-100' : ''}`} onClick={sortKey ? () => handleSort(sortKey) : undefined}>
+    <th className={`${headerClassName} relative ${sortKey ? `cursor-pointer ${TASK_HEADER_TH_HOVER}` : ''}`} onClick={sortKey ? () => handleSort(sortKey) : undefined}>
       <div className={`flex items-center gap-1 ${align === 'center' ? 'justify-center' : 'justify-between'}`}>
         <div className="flex items-center gap-1">
           <span>{label}</span>
@@ -183,17 +257,17 @@ export default function TaskTable({
         </div>
         <button type="button"
           onClick={e => { e.stopPropagation(); setOpenColumnFilter(current => current === filterKey ? null : filterKey); }}
-          className={`p-1 rounded-md border transition-colors ${isColumnFilterActive(filterKey) ? 'bg-emerald-100 text-emerald-700 border-emerald-300' : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-100'}`}
+          className={`p-1 rounded-md border transition-colors ${isColumnFilterActive(filterKey) ? 'bright-surface bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-900/40 dark:text-emerald-300 dark:border-emerald-700' : TASK_HEADER_FILTER_BTN_INACTIVE}`}
           title={`סינון ${label}`}
         >
           <Filter size={12} />
         </button>
       </div>
       {openColumnFilter === filterKey && (
-        <div className={`absolute mt-2 z-[9999] ${contentClassName} rounded-xl border border-gray-200 bg-white shadow-xl p-3`} style={{ top: '100%' }} onClick={e => e.stopPropagation()}>
+        <div className={`absolute mt-2 z-[9999] ${TASK_FILTER_POPOVER} ${contentClassName}`} style={{ top: '100%' }} onClick={e => e.stopPropagation()}>
           <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-semibold text-gray-800">סינון {label}</span>
-            <button type="button" onClick={() => setOpenColumnFilter(null)} className="p-1 rounded-md text-gray-500 hover:bg-gray-100"><X size={14} /></button>
+            <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">סינון {label}</span>
+            <button type="button" onClick={() => setOpenColumnFilter(null)} className="p-1 rounded-md text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"><X size={14} /></button>
           </div>
           {children}
         </div>
@@ -205,20 +279,32 @@ export default function TaskTable({
   const saveSubject = (taskId: number) => { if (editingSubject.trim()) onTaskSubjectChange(taskId, editingSubject.trim()); setEditingTaskId(null); setEditingSubject(''); };
   const cancelEditing = () => { setEditingTaskId(null); setEditingSubject(''); };
   const handleOpenChat = (task: TaskReview, e: React.MouseEvent) => { e.stopPropagation(); setChatTask(task); setShowChatModal(true); };
-  const handleSendInvoiceRequest = (task: TaskReview, e: React.MouseEvent) => { e.stopPropagation(); alert(`שליחת בקשה להגשת חשבון עבור: ${task.subject}`); };
+  const handleSendInvoiceRequest = (task: TaskReview, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setBillRequestTask({ ...task, hasBill: true });
+  };
   const handleCloseChat = () => {
     if (chatTask?.hasChat) onTasksUpdate(tasks.map(t => t.id === chatTask.id ? { ...t, hasChat: true } : t));
     setShowChatModal(false);
   };
-
+  // const isTaskBlockedByDependency = (task: TaskReview): boolean => {
+  //   if (!task.dependsOnTaskID && !task.dependsOnStepID) return false;
+  //     return task.stepDependStatusID !== 3||task.taskDependStatusID !== 3;
+  // }
   return (
     <>
-      <div style={{ overflowX: openColumnFilter ? 'visible' : 'auto', overflowY: openColumnFilter ? 'visible' : 'visible', WebkitOverflowScrolling: 'touch' }} className="sticky bottom-0">
+      <HorizontalScrollContainer
+        contentClassName={TASK_TABLE_SHELL}
+        contentStyle={{
+          overflowX: openColumnFilter ? 'visible' : undefined,
+          overflowY: openColumnFilter ? 'visible' : undefined,
+        }}
+      >
         <table className="w-full min-w-[1800px]">
-          <thead className="bg-gray-50 border-b border-gray-200">
+          <thead className={TASK_TABLE_HEAD}>
             <tr>
               {/* Eye sticky */}
-              <th className="px-2 py-2 w-10 sticky right-0 z-20 bg-gray-50 border-l border-gray-200" />
+              <th className={`px-2 py-2 w-10 sticky right-0 z-20 ${TASK_TABLE_HEAD_CELL}`} />
 
               {renderHeaderFilter({
                 filterKey: 'isClosed', label: 'נבדק',
@@ -238,7 +324,7 @@ export default function TaskTable({
 
               {/* 1. תיאור המשימה — 2 שורות + tooltip */}
               <SortableTh sortKey="subject" label="תיאור המשימה" className="px-3 py-2 text-right text-xs font-semibold text-gray-700 min-w-[200px]" sort={sort} onSort={handleSort} />
-              <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-16">Chat</th>
+              <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-16">צ'אט</th>
 
               {/* 2. שלב — 2 שורות + tooltip */}
               <SortableTh sortKey="name" label="שלב" className="px-3 py-2 text-right text-xs font-semibold text-gray-700 w-32" sort={sort} onSort={handleSort} />
@@ -340,22 +426,25 @@ export default function TaskTable({
                 )
               })}
 
-              <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-20">תלוי בשלב</th>
+              <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-20">תלוי משימה</th>
               <SortableTh sortKey="workHours" label="תקצוב שעות למשימה" className="px-3 py-2 text-right text-xs font-semibold text-emerald-700 w-32" sort={sort} onSort={handleSort} />
               <SortableTh sortKey="utilizationPercentage" label="אחוז ניצול במשימה" className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-28" sort={sort} onSort={handleSort} />
               <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-20">אינדקציה לחשבון</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-200">
-            {sortedTasks.map(task => (
+          <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+            {sortedTasks.map((task, index) => {
+              // const dependencyBlocked = isTaskBlockedByDependency(task);
+              // const dependencyBlockTitle = 'המשימה תלויה במשימה/שלב קודם שטרם הושלם';
+              return (
               <tr
-                key={task.id}
-                onMouseEnter={() => setHoveredTaskId(task.id)}
-                onMouseLeave={() => setHoveredTaskId(null)}
-                className="hover:bg-emerald-50 transition-colors relative group"
+                key={taskReviewRowKey(task, index)}
+                // onMouseEnter={() => setHoveredTaskId(task.id)}
+                // onMouseLeave={() => setHoveredTaskId(null)}
+                className="hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors relative group"
               >
                 {/* 5. Eye sticky — כמו MyTasks */}
-                <td className="px-2 py-2 sticky right-0 z-10 bg-white group-hover:bg-emerald-50 border-l border-gray-200">
+                <td className={`px-2 py-2 sticky right-0 z-10 ${TASK_TABLE_STICKY_CELL}`}>
                   <button
                     onClick={() => onTaskClick(task)}
                     className="p-1 rounded-lg bg-emerald-500 text-white hover:bg-emerald-600 transition-all opacity-0 group-hover:opacity-100"
@@ -368,7 +457,8 @@ export default function TaskTable({
                 {/* Checkbox */}
                 <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
                   <input type="checkbox" checked={task.isClosed || false} onChange={() => onTaskComplete(task.id)}
-                    className="w-4 h-4 rounded border-gray-300 text-emerald-500 cursor-pointer focus:ring-emerald-500" />
+                    
+                    className="w-4 h-4 rounded border-gray-300 text-emerald-500 cursor-pointer focus:ring-emerald-500 disabled:cursor-not-allowed disabled:opacity-50" />
                 </td>
 
                 {/* 1. תיאור המשימה — 2 שורות + tooltip */}
@@ -406,9 +496,9 @@ export default function TaskTable({
                 <td className="px-3 py-2 max-w-[128px]">
                   <span
                     className="inline-flex px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs font-medium max-w-full overflow-hidden text-ellipsis whitespace-nowrap block"
-                    title={task.subject}
+                    title={task.name}
                   >
-                    {task.subject}
+                    {task.name}
                   </span>
                 </td>
 
@@ -451,10 +541,14 @@ export default function TaskTable({
                             style={getStatusColorByKey(task.statuID ?? 0)}
                           />
                           <select
+                            key={`status-${task.id}-${task.statuID}`}
                             value={selectedStatusId}
-                            disabled={false}
-                            onChange={e => { const id = Number(e.target.value); const name = statuses.find(s => s.id === id)?.name ?? task.statusName; onTaskStatusChange(task.id, id, name); }}
-                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            onChange={e => {
+                              const id = Number(e.target.value);
+                              const name = statuses.find(s => s.id === id)?.name ?? task.statusName;
+                              void handleTableStatusChange(task, id, name);
+                            }}
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
                             title={selectedStatusName}
                           >
                             {fallbackOptionNeeded && <option value="0">{task.statusName}</option>}
@@ -594,20 +688,25 @@ export default function TaskTable({
 
                 {/* חשבון */}
                 <td className="px-3 py-2 text-center" onClick={e => e.stopPropagation()}>
-                  <button onClick={e => handleSendInvoiceRequest(task, e)}
-                    className="px-2 py-1 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-all flex items-center gap-1 text-xs font-bold mx-auto" title="שלח בקשה להגשת חשבון">
+                  <button onClick={e => { handleSendInvoiceRequest(task, e); }}
+                    className="relative px-2 py-1 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-all flex items-center gap-1 text-xs font-bold mx-auto disabled:cursor-not-allowed disabled:opacity-50"
+                    title={task.hasBill ? 'קיימת בקשת חשבון' : 'שלח בקשה להגשת חשבון'}>
                     <Send size={12} />
                     <span className="hidden lg:inline">חשבון</span>
+                    {(task.hasBill || (billRequestTask && billRequestTask.id === task.id && billRequestTask.hasBill)) && (
+                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-white" />
+                    )}
                   </button>
                 </td>
               </tr>
-            ))}
+            );
+            })}
             {sortedTasks.length === 0 && (
               <tr><td colSpan={17} className="px-4 py-2 text-center text-gray-400 text-xs">לא נמצאו משימות</td></tr>
             )}
           </tbody>
         </table>
-      </div>
+      </HorizontalScrollContainer>
 
       {/* ── מקטע סיכום ── */}
 {(() => {
@@ -618,11 +717,11 @@ export default function TaskTable({
   const actualHours = columnFilteredTasks.reduce((s, t) => s + (t.hourReport ?? 0), 0);
 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl p-4 mt-2 mb-2">
+    <div className={TASK_SUMMARY_PANEL}>
       <div className="grid grid-cols-5 gap-4 text-center">
         <div>
           <div className="text-2xl font-bold text-blue-600">{totalTasks}</div>
-          <div className="text-xs text-gray-500 mt-1">משימות</div>
+          <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">משימות</div>
         </div>
         <div>
           <div className="text-2xl font-bold text-indigo-600">
@@ -653,6 +752,35 @@ export default function TaskTable({
       {showChatModal && chatTask && (
         <ChatModal task={chatTask} setTask={setChatTask} onClose={() => { handleCloseChat(); }} />
       )}
+
+      {billRequestTask && (
+        <PlanningBillRequestModal
+          task={billRequestTask}
+          onClose={() => setBillRequestTask(null)}
+          onSuccess={() => {
+            if (billRequestTask) {
+              onTasksUpdate(tasks.map(t => t.id === billRequestTask.id ? { ...t, hasBill: true } : t));
+            }
+            showMessage('בקשה להגשת חשבון נפתחה בהצלחה', 'הגשת חשבון', 'success');
+          }}
+          onError={message => showMessage(message, 'שגיאה', 'error')}
+        />
+      )}
+
+      <MessageBox
+        isOpen={messageBox.isOpen}
+        onClose={closeMessageBox}
+        title={messageBox.title}
+        message={messageBox.message}
+        type={messageBox.type}
+        confirmText={messageBox.confirmText}
+        cancelText={messageBox.cancelText ?? 'לא'}
+        showCancel={messageBox.showCancel}
+        checkboxLabel={messageBox.checkboxLabel}
+        checkboxDefaultChecked={messageBox.checkboxDefaultChecked}
+        onConfirm={messageBox.onConfirm}
+        onCancel={messageBox.onCancel}
+      />
     </>
   );
 }

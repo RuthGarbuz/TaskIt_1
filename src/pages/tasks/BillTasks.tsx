@@ -1,34 +1,42 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Clock, Eye, MessageSquare, Filter, X, ChevronUp, ChevronDown, ChevronsUpDown, FileText } from 'lucide-react';
+import { Clock, Eye, MessageSquare, Filter, X, ChevronUp, ChevronDown, ChevronsUpDown, FileText, Trash2 } from 'lucide-react';
 import { useTaskFilters } from '../../hooks/useTaskFilters';
 import { useTaskGrouping } from '../../hooks/useTaskGrouping';
 import TaskControls from './TaskControls';
 import TaskCard from './TaskCard';
 import ViewModal from '../../components/ViewModal';
-import type { EmployeeLink, SystemTable, TaskReview, TaskCardSaveOptions } from '../../Data/projectsData';
-import { getTaskPriorities, getTaskStatuses, updateStatusAsync, getMyTasks, updateIsClosedAsync, updateTaskAsync } from '../../services/taskService';
+import type { BillTaskReview, SystemTable } from '../../Data/projectsData';
+import { getTaskPriorities, getTaskStatuses } from '../../services/taskService';
+import { deletePlanningBill, getBillTasks, updateSubmitedBill } from '../../services/taskBillService';
 import ChatModal from './ChatModal';
-import authService from '../../services/authService';
 import type { DBFilters } from '../../Data/tasksData';
 import DateFilter from '../shared/DateFilter';
 import SearchableCheckboxFilter from '../shared/SearchableCheckboxFilter';
 import DbFilterModal, { getDefaultDBFilters } from './DbFilterModal';
 import { usePersistedDbFilters } from '../../hooks/usePersistedDbFilters';
+import { usePersistedSessionState, isBillTasksActiveView } from '../../hooks/usePersistedSessionState';
 import SubContractsModal from './SubContractsModal';
+import MessageBox from '../shared/MessageBox';
+import HorizontalScrollContainer from '../../components/HorizontalScrollContainer';
+import { BRIGHT_SURFACE, TASK_FILTER_POPOVER, TASK_GROUP_CARD, TASK_HEADER_FILTER_BTN_INACTIVE, TASK_HEADER_TH_HOVER, TASK_TABLE_HEAD, TASK_TABLE_HEAD_CELL, TASK_TABLE_SHELL, TASK_TABLE_STICKY_CELL } from './taskViewTheme';
 
 
 interface BillTasksProps {
-  tasks: TaskReview[];
-  onTaskUpdate: (updatedTask: TaskReview) => void;
-  onTasksUpdate: (tasks: TaskReview[]) => void;
+  tasks: BillTaskReview[];
+  onTaskUpdate: (updatedTask: BillTaskReview) => void;
+  onTasksUpdate: (tasks: BillTaskReview[]) => void;
 }
 
-type StatusKey = 'todo' | 'inProgress' | 'done';
 type ColumnFilterKey = 'isBilled' | 'project' | 'status' | 'sender' | 'openedDate';
 
-type SortKey = 'subject' | 'name' | 'planningSubjectName' | 'projectName' | 'statusName' | 'senderName' | 'startDate' | 'endDate' | 'workHours' | 'utilizationPercentage';
+type SortKey = 'subject' | 'name' | 'planningSubjectName' | 'projectName' | 'statusName' | 'senderName' | 'creatDate' | 'endDate' | 'workHours' | 'utilizationPercentage';
 type SortDir = 'asc' | 'desc' | null;
 interface SortState { key: SortKey | null; dir: SortDir; }
+
+const truncateTo18 = (value?: string) => {
+  const text = (value ?? '').trim();
+  return text.length > 18 ? `${text.slice(0, 18)}...` : text;
+};
 
 function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
   if (!active || !dir) return <ChevronsUpDown size={11} className="text-gray-400" />;
@@ -39,7 +47,7 @@ function SortableTh({ sortKey, label, className, sort, onSort }: {
   sortKey: SortKey; label: string; className: string; sort: SortState; onSort: (k: SortKey) => void;
 }) {
   return (
-    <th className={`${className} cursor-pointer select-none hover:bg-gray-100 transition-colors`} onClick={() => onSort(sortKey)}>
+    <th className={`${className} cursor-pointer select-none ${TASK_HEADER_TH_HOVER} transition-colors`} onClick={() => onSort(sortKey)}>
       <div className="flex items-center gap-1">
         <span>{label}</span>
         <SortIcon active={sort.key === sortKey} dir={sort.key === sortKey ? sort.dir : null} />
@@ -53,10 +61,10 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
   const [showViewModal, setShowViewModal] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [dbFilters, setDbFilters] = usePersistedDbFilters('taskit.dbFilters.billTasks', getBillTasksDefaultFilters);
-  const [activeView, setActiveView] = useState<'all' | 'status' | 'project' | 'date'>('all');
-  const [selectedTask, setSelectedTask] = useState<TaskReview | null>(null);
+  const [activeView, setActiveView] = usePersistedSessionState('taskit.ui.billTasks.activeView', 'all', isBillTasksActiveView);
+  const [selectedTask, setSelectedTask] = useState<BillTaskReview | null>(null);
   const [showChatModal, setShowChatModal] = useState(false);
-  const [chatTask, setChatTask] = useState<TaskReview | null>(null);
+  const [chatTask, setChatTask] = useState<BillTaskReview | null>(null);
   const [statuses, setStatuses] = useState<SystemTable[]>([]);
   const [priorities, setPriorities] = useState<SystemTable[]>([]);
   const [openColumnFilter, setOpenColumnFilter] = useState<ColumnFilterKey | null>(null);
@@ -70,10 +78,67 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
     openedDateTo: '',
   });
   const [sort, setSort] = useState<SortState>({ key: null, dir: null });
+  const [deletingBillId, setDeletingBillId] = useState<number | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [messageBox, setMessageBox] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: 'alert' | 'success' | 'error' | 'warning';
+    confirmText?: string;
+    cancelText?: string;
+    showCancel?: boolean;
+    onConfirm?: () => void;
+    onCancel?: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'warning',
+  });
+
+  const closeMessageBox = () => {
+    setMessageBox(prev => ({
+      ...prev,
+      isOpen: false,
+      showCancel: false,
+      onConfirm: undefined,
+      onCancel: undefined,
+    }));
+  };
+
+  const showMessage = (
+    message: string,
+    title = 'הודעה',
+    type: 'alert' | 'success' | 'error' | 'warning' = 'alert',
+  ) => {
+    setMessageBox({ isOpen: true, title, message, type, confirmText: 'אישור' });
+  };
+
+  const openConfirm = (message: string, title = 'אישור'): Promise<boolean> =>
+    new Promise(resolve => {
+      setMessageBox({
+        isOpen: true,
+        title,
+        message,
+        type: 'warning',
+        showCancel: true,
+        confirmText: 'אישור',
+        cancelText: 'ביטול',
+        onConfirm: () => {
+          resolve(true);
+          closeMessageBox();
+        },
+        onCancel: () => {
+          resolve(false);
+          closeMessageBox();
+        },
+      });
+    });
 
   // ── תתי חוזים ──
   const [showSubContractsModal, setShowSubContractsModal] = useState(false);
-  const [subContractsTask, setSubContractsTask] = useState<TaskReview | null>(null);
+  const [subContractsTask, setSubContractsTask] = useState<BillTaskReview | null>(null);
 
   const handleSort = (key: SortKey) => {
     setSort(prev => {
@@ -83,16 +148,6 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
     });
   };
 
-  const userId = authService.getCurrentUser()?.id ?? 0;
-
-  const statusKeyFromName = (statusName: string): StatusKey => {
-    const value = statusName.toLowerCase();
-    if (value.includes('done') || value.includes('הושלם') || value.includes('סגור')) return 'done';
-    if (value.includes('progress') || value.includes('בביצוע')) return 'inProgress';
-    return 'todo';
-  };
-
-  const statusOptions = useMemo(() => statuses.map(s => ({ id: s.id, name: s.name })), [statuses]);
   const { searchQuery, setSearchQuery, filteredTasks, activeFiltersCount } = useTaskFilters(tasks, 'myTasks', '');
 
   const toggleArrayFilter = <T,>(items: T[], value: T) =>
@@ -141,27 +196,27 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
 
   const columnFilteredTasks = useMemo(() =>
     filteredTasks.filter(task => {
-      const billedState = task.isClosed ? 'billed' : 'notBilled';
+      const billedState = task.isSubmited ? 'billed' : 'notBilled';
       return (
         (columnFilters.billedStates.length === 0 || columnFilters.billedStates.includes(billedState)) &&
         (columnFilters.projects.length === 0 || columnFilters.projects.includes(task.projectName)) &&
         (columnFilters.statuses.length === 0 || columnFilters.statuses.includes(task.statuID ?? 0)) &&
         (columnFilters.senders.length === 0 || columnFilters.senders.includes(task.senderName)) &&
-        matchesDateRange(task.startDate, columnFilters.openedDateFrom, columnFilters.openedDateTo)
+        matchesDateRange(task.creatDate, columnFilters.openedDateFrom, columnFilters.openedDateTo)
       );
     }), [filteredTasks, columnFilters]);
 
-  const sortTasks = (taskList: TaskReview[]) => {
+  const sortTasks = (taskList: BillTaskReview[]) => {
     if (!sort.key || !sort.dir) return taskList;
     return [...taskList].sort((a, b) => {
       const key = sort.key!;
       let aVal: string | number = '';
       let bVal: string | number = '';
-      if (key === 'startDate') { aVal = toComparableDate(a.startDate) ?? ''; bVal = toComparableDate(b.startDate) ?? ''; }
+      if (key === 'creatDate') { aVal = toComparableDate(a.creatDate) ?? ''; bVal = toComparableDate(b.creatDate) ?? ''; }
       else if (key === 'endDate') { aVal = toComparableDate(a.endDate) ?? ''; bVal = toComparableDate(b.endDate) ?? ''; }
       else if (key === 'workHours') { aVal = a.workHours ?? 0; bVal = b.workHours ?? 0; }
       else if (key === 'utilizationPercentage') { aVal = a.utilizationPercentage ?? 0; bVal = b.utilizationPercentage ?? 0; }
-      else { aVal = (a[key as keyof TaskReview] as string | null | undefined) ?? ''; bVal = (b[key as keyof TaskReview] as string | null | undefined) ?? ''; }
+      else { aVal = (a[key as keyof BillTaskReview] as string | null | undefined) ?? ''; bVal = (b[key as keyof BillTaskReview] as string | null | undefined) ?? ''; }
       if (typeof aVal === 'number' && typeof bVal === 'number')
         return sort.dir === 'asc' ? aVal - bVal : bVal - aVal;
       const cmp = String(aVal).localeCompare(String(bVal), 'he', { sensitivity: 'base' });
@@ -199,7 +254,7 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
     sortKey?: SortKey; children: React.ReactNode;
   }) => (
     <th
-      className={`${headerClassName} relative ${sortKey ? 'cursor-pointer hover:bg-gray-100' : ''}`}
+      className={`${headerClassName} relative ${sortKey ? `cursor-pointer ${TASK_HEADER_TH_HOVER}` : ''}`}
       onClick={sortKey ? () => handleSort(sortKey) : undefined}
     >
       <div className={`flex items-center gap-1 ${align === 'center' ? 'justify-center' : 'justify-between'}`}>
@@ -212,8 +267,8 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
           onClick={e => { e.stopPropagation(); setOpenColumnFilter(current => current === filterKey ? null : filterKey); }}
           className={`p-1 rounded-md border transition-colors ${
             isColumnFilterActive(filterKey)
-              ? 'bg-emerald-100 text-emerald-700 border-emerald-300'
-              : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-100'
+              ? 'bright-surface bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-900/40 dark:text-emerald-300 dark:border-emerald-700'
+              : TASK_HEADER_FILTER_BTN_INACTIVE
           }`}
           title={`סינון ${label}`}
         >
@@ -222,13 +277,13 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
       </div>
       {openColumnFilter === filterKey && (
         <div
-          className={`absolute mt-2 z-[9999] ${contentClassName} rounded-xl border border-gray-200 bg-white shadow-xl p-3`}
+          className={`absolute mt-2 z-[9999] ${TASK_FILTER_POPOVER} ${contentClassName}`}
           style={{ top: '100%' }}
           onClick={e => e.stopPropagation()}
         >
           <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-semibold text-gray-800">סינון {label}</span>
-            <button type="button" onClick={() => setOpenColumnFilter(null)} className="p-1 rounded-md text-gray-500 hover:bg-gray-100">
+            <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">סינון {label}</span>
+            <button type="button" onClick={() => setOpenColumnFilter(null)} className="p-1 rounded-md text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700">
               <X size={14} />
             </button>
           </div>
@@ -240,18 +295,33 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
 
   const loadTasks = async (isMounted: boolean, filters?: DBFilters) => {
     try {
-      const data = await getMyTasks(
-        filters?.dateFrom || null, filters?.dateTo || null,
-        filters?.closedTasks === 'yes' ? true : filters?.closedTasks === 'no' ? false : undefined,
+      const isSubmitedFilter =
+        filters?.closedTasks === 'yes' ? true : filters?.closedTasks === 'no' ? false : undefined;
+      const data = await getBillTasks(
+        filters?.dateFrom || null,
+        filters?.dateTo || null,
+        isSubmitedFilter,
         {
           statusIds: filters?.status.length ? filters.status : undefined,
-          priorityIds: filters?.urgency.length ? filters.urgency : undefined,
           projectIds: filters?.projects.length ? filters.projects : undefined,
           employeeIds: filters?.senders.length ? filters.senders : undefined,
-        }
+        },
       );
-      if (isMounted) onTasksUpdate(data ?? []);
+      const filtered =
+        isSubmitedFilter === undefined
+          ? data
+          : (data ?? []).filter(task => task.isSubmited === isSubmitedFilter);
+      if (isMounted) onTasksUpdate(filtered ?? []);
     } catch (error) { console.error('Error loading bill tasks:', error); }
+  };
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await loadTasks(true, dbFilters);
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   useEffect(() => {
@@ -264,67 +334,62 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
       try { const data = await getTaskPriorities(); if (isMounted) setPriorities(data ?? []); }
       catch { if (isMounted) setPriorities([]); }
     };
-    loadTasks(isMounted, dbFilters);
-    loadStatuses();
-    loadPriorities();
-    const intervalId = window.setInterval(() => loadTasks(true, dbFilters), 30000);
-    return () => { isMounted = false; window.clearInterval(intervalId); };
-  }, [onTasksUpdate, dbFilters]);
+    void loadTasks(isMounted, dbFilters);
+    void loadStatuses();
+    void loadPriorities();
+    return () => { isMounted = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount; filter modal calls loadTasks on apply
+  }, []);
 
-  const handleTaskStatusChange = async (taskId: number, statusId: number) => {
-    const nextStatusName = statusOptions.find(s => s.id === statusId)?.name ?? '';
-    const isTask = tasks.find(t => t.id === taskId)?.isPlanningSte ?? false;
-    await updateStatusAsync(taskId, statusId, !isTask, false);
-    onTasksUpdate(tasks.map(task => task.id === taskId
-      ? { ...task, statuID: statusId, statusName: nextStatusName || task.statusName, isClosed: statusKeyFromName(nextStatusName || task.statusName) === 'done' }
-      : task));
+  const handleBilledChange = async (planningBillID: number, checked: boolean) => {
+    const previousTasks = tasks;
+    const updatedTasks = tasks.map(task => (
+      task.planningBillID === planningBillID ? { ...task, isSubmited: checked } : task
+    ));
+    onTasksUpdate(updatedTasks);
+    const updatedTask = updatedTasks.find(t => t.planningBillID === planningBillID);
+    if (updatedTask) onTaskUpdate(updatedTask);
+
+    try {
+      const ok = await updateSubmitedBill(planningBillID, checked);
+      if (!ok) {
+        onTasksUpdate(previousTasks);
+        const reverted = previousTasks.find(t => t.planningBillID === planningBillID);
+        if (reverted) onTaskUpdate(reverted);
+        showMessage('בקשת החשבון לא נמצאה', 'שגיאה', 'error');
+        return;
+      }
+    } catch (err) {
+      onTasksUpdate(previousTasks);
+      const reverted = previousTasks.find(t => t.planningBillID === planningBillID);
+      if (reverted) onTaskUpdate(reverted);
+      const message = err instanceof Error && err.message.trim()
+        ? err.message.trim()
+        : 'שגיאה בעדכון סטטוס הגשת החשבון';
+      showMessage(message, 'שגיאה', 'error');
+    }
   };
 
-  const handleTaskUpdateFromCard = async (
-    updatedTask: TaskReview,
-    _employeeLinks?: EmployeeLink[],
-    options?: TaskCardSaveOptions
-  ) => {
-    const currentTask = tasks.find(t => t.id === updatedTask.id);
-    const isTask = currentTask?.isPlanningSte ?? false;
-    if (currentTask && currentTask.statuID !== updatedTask.statuID) {
-      const nextStatusName = statusOptions.find(s => s.id === (updatedTask.statuID ?? 0))?.name ?? updatedTask.statusName ?? '';
-      await updateStatusAsync(updatedTask.id, updatedTask.statuID ?? 0, !isTask, false);
-      updatedTask = { ...updatedTask, statusName: nextStatusName, isClosed: statusKeyFromName(nextStatusName) === 'done' };
+  const handleDeleteBill = async (planningBillID: number) => {
+    const confirmed = await openConfirm('האם למחוק את בקשת החשבון?', 'מחיקת בקשת חשבון');
+    if (!confirmed) return;
+    setDeletingBillId(planningBillID);
+    try {
+      const ok = await deletePlanningBill(planningBillID);
+      if (!ok) {
+        showMessage('בקשת החשבון לא נמצאה', 'שגיאה', 'error');
+        return;
+      }
+      onTasksUpdate(tasks.filter(t => t.planningBillID !== planningBillID));
+      showMessage('בקשת החשבון נמחקה בהצלחה', 'הצלחה', 'success');
+    } catch (err) {
+      const message = err instanceof Error && err.message.trim()
+        ? err.message.trim()
+        : 'שגיאה במחיקת בקשת החשבון';
+      showMessage(message, 'שגיאה', 'error');
+    } finally {
+      setDeletingBillId(null);
     }
-    if (currentTask && currentTask.isClosed !== updatedTask.isClosed)
-      await updateIsClosedAsync(updatedTask.id, updatedTask.isClosed ?? false, !isTask);
-    if (options?.cascadeStage) {
-      const c = options.cascadeStage;
-      await updateTaskAsync(
-        { id: c.id, startDate: c.startDate, endDate: c.endDate },
-        [],
-        false
-      );
-      onTasksUpdate(
-        tasks.map(t => {
-          if (t.id === updatedTask.id) return { ...updatedTask };
-          if (t.id === c.id) return { ...t, startDate: c.startDate, endDate: c.endDate };
-          return t;
-        })
-      );
-    } else {
-      onTasksUpdate(tasks.map(t => t.id === updatedTask.id ? { ...updatedTask } : t));
-    }
-    onTaskUpdate(updatedTask);
-  };
-
-  const handleBilledChange = async (taskId: number, checked: boolean) => {
-    const currentTask = tasks.find((t) => t.id === taskId);
-    const isTask = currentTask?.isPlanningSte ?? false;
-    await updateIsClosedAsync(taskId, checked, !isTask);
-    const updatedTask = tasks.find((t) => t.id === taskId);
-    if (updatedTask) {
-      onTaskUpdate({ ...updatedTask, isClosed: checked });
-    }
-    onTasksUpdate(tasks.map((task) => (
-      task.id === taskId ? { ...task, isClosed: checked } : task
-    )));
   };
 
   const getStatusColorByKey = (statusId: number) => {
@@ -342,6 +407,8 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
         currentView="billTasks" activeFiltersCount={activeFiltersCount + columnFilterCount}
         onShowViewModal={() => setShowViewModal(true)}
         onShowFilterModal={() => setShowFilterModal(true)}
+        onRefresh={() => { void handleRefresh(); }}
+        refreshing={refreshing}
         totalTasks={tasks.length} filteredTasksCount={columnFilteredTasks.length}
       />
 
@@ -349,7 +416,7 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
         {Object.entries(groupedTasks).map(([groupName, groupTasks]) => {
           const sorted = sortTasks(groupTasks);
           return (
-            <div key={groupName} className="bg-white rounded-xl shadow-sm border border-gray-200">
+            <div key={groupName} className={TASK_GROUP_CARD}>
               {activeView !== 'all' && (
                 <div className={`px-6 py-3 flex items-center justify-between ${
                   activeView === 'project' ? 'bg-gradient-to-r from-blue-400 to-blue-500' :
@@ -364,19 +431,18 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
                 </div>
               )}
 
-              <div
-                style={{
-                  overflowX: openColumnFilter ? 'visible' : 'auto',
-                  overflowY: openColumnFilter ? 'visible' : 'visible',
-                  WebkitOverflowScrolling: 'touch',
+              <HorizontalScrollContainer
+                contentClassName={TASK_TABLE_SHELL}
+                contentStyle={{
+                  overflowX: openColumnFilter ? 'visible' : undefined,
+                  overflowY: openColumnFilter ? 'visible' : undefined,
                 }}
-                className="sticky bottom-0"
               >
                 <table style={{ minWidth: '1700px', width: '100%' }}>
-                  <thead className="bg-gray-50 border-b border-gray-200">
+                  <thead className={TASK_TABLE_HEAD}>
                     <tr>
                       {/* Eye sticky */}
-                      <th className="px-2 py-2 w-10 sticky right-0 z-20 bg-gray-50 border-l border-gray-200" />
+                      <th className={`px-2 py-2 w-10 sticky right-0 z-20 ${TASK_TABLE_HEAD_CELL}`} />
 
                       {/* הוגש חשבון */}
                       {renderHeaderFilter({
@@ -404,7 +470,7 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
                         label: 'מתי נפתחה הבקשה',
                         headerClassName: 'px-3 py-2 text-right text-xs font-semibold text-emerald-700 w-36 whitespace-nowrap',
                         contentClassName: 'w-80',
-                        sortKey: 'startDate',
+                        sortKey: 'creatDate',
                         children: (
                           <DateFilter
                             fromDate={columnFilters.openedDateFrom}
@@ -436,8 +502,10 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
 
                       <SortableTh sortKey="subject" label="תיאור המשימה" className="px-3 py-2 text-right text-xs font-semibold text-gray-700 min-w-[200px]" sort={sort} onSort={handleSort} />
 
+                      <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700 min-w-[140px] whitespace-nowrap">הערה</th>
+
                       {/* Chat */}
-                      <th className="px-3 py-2 text-center text-xs font-semibold text-gray-700 w-16">Chat</th>
+                      <th className="px-3 py-2 text-center text-xs font-semibold text-gray-700 w-16">צ'אט</th>
 
                       {/* תת חוזה — עמודה חדשה */}
                       <th className="px-3 py-2 text-center text-xs font-semibold text-amber-700 w-20 whitespace-nowrap">
@@ -465,7 +533,7 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
 
                       {renderHeaderFilter({
                         filterKey: 'status', label: 'סטטוס משימה',
-                        headerClassName: 'px-3 py-2 text-right text-xs font-semibold text-gray-700 w-20 whitespace-nowrap',
+                        headerClassName: 'px-3 py-2 text-right text-xs font-semibold text-gray-700 w-28 min-w-[7rem] whitespace-nowrap',
                         sortKey: 'statusName',
                         children: (
                           <SearchableCheckboxFilter
@@ -480,15 +548,16 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
                       })}
 
                       <SortableTh sortKey="workHours" label="תקצוב שעות למשימה" className="px-3 py-2 text-right text-xs font-semibold text-emerald-700 w-32" sort={sort} onSort={handleSort} />
-                      <SortableTh sortKey="utilizationPercentage" label="ניצול שעות במשימה" className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-28" sort={sort} onSort={handleSort} />
+                      <SortableTh sortKey="utilizationPercentage" label="אחוז ניצול במשימה" className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-28" sort={sort} onSort={handleSort} />
+                      <th className="px-3 py-2 text-center text-xs font-semibold text-red-600 w-16 whitespace-nowrap">מחק</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-200">
+                  <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                     {sorted.map(task => (
-                      <tr key={task.id} className="hover:bg-emerald-50 transition-colors relative group">
+                      <tr key={task.planningBillID} className="hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors relative group">
 
                         {/* Eye sticky */}
-                        <td className="px-2 py-2 sticky right-0 z-10 bg-white group-hover:bg-emerald-50 border-l border-gray-200">
+                        <td className={`px-2 py-2 sticky right-0 z-10 ${TASK_TABLE_STICKY_CELL}`}>
                           <button
                             onClick={() => setSelectedTask(task)}
                             className="p-1 rounded-lg bg-emerald-500 text-white hover:bg-emerald-600 transition-all opacity-0 group-hover:opacity-100"
@@ -502,8 +571,8 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
                         <td className="px-3 py-2 text-center">
                           <input
                             type="checkbox"
-                            checked={task.isClosed || false}
-                            onChange={(e) => handleBilledChange(task.id, e.target.checked)}
+                            checked={task.isSubmited || false}
+                            onChange={e => { void handleBilledChange(task.planningBillID, e.target.checked); }}
                             className="w-4 h-4 rounded border-gray-300 text-emerald-500 cursor-pointer"
                           />
                         </td>
@@ -513,14 +582,25 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
                           <div className="flex items-center gap-1">
                             <Clock size={12} className="text-gray-400" />
                             <span className="text-xs text-gray-600">
-                              {task.startDate ? new Date(task.startDate).toLocaleDateString('en-GB') : '-'}
+                              {task.creatDate ? new Date(task.creatDate).toLocaleDateString('en-GB') : '-'}
                             </span>
                           </div>
                         </td>
 
                         {/* פותח הבקשה */}
                         <td className="px-3 py-2">
-                          <span className="text-xs text-gray-600">{task.senderName}</span>
+                          <span
+                            className="text-xs text-gray-600 block overflow-hidden"
+                            style={{
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                              overflow: 'hidden',
+                            }}
+                            title={task.senderName}
+                          >
+                            {task.senderName}
+                          </span>
                         </td>
 
                         {/* תיאור המשימה */}
@@ -539,6 +619,22 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
                           </span>
                         </td>
 
+                        {/* הערה */}
+                        <td className="px-3 py-2 max-w-[160px]">
+                          <span
+                            className="text-xs text-gray-600 block overflow-hidden"
+                            style={{
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                              overflow: 'hidden',
+                            }}
+                            title={task.billNote ?? ''}
+                          >
+                            {task.billNote?.trim() || '-'}
+                          </span>
+                        </td>
+
                         {/* Chat */}
                         <td className="px-3 py-2 text-center" onClick={e => e.stopPropagation()}>
                           <button
@@ -547,7 +643,7 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
                             title="פתח צ'אט"
                           >
                             <MessageSquare size={14} />
-                            {(task.hasChat || (chatTask && chatTask.id === task.id && chatTask.hasChat)) && (
+                            {(task.hasChat || (chatTask && chatTask.planningBillID === task.planningBillID && chatTask.hasChat)) && (
                               <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-white" />
                             )}
                           </button>
@@ -570,34 +666,62 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
 
                         {/* שלב */}
                         <td className="px-3 py-2">
-                          <span className="inline-flex px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">{task.name}</span>
+                          <span
+                            className={`inline-flex px-2 py-0.5 ${BRIGHT_SURFACE} bg-purple-100 text-purple-700 rounded-full text-xs font-medium max-w-[140px] overflow-hidden`}
+                            style={{
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                              overflow: 'hidden',
+                            }}
+                            title={task.name}
+                          >
+                            {task.name}
+                          </span>
                         </td>
 
                         {/* נושא תכנון */}
                         <td className="px-3 py-2">
-                          <span className="text-xs text-gray-600">{task.planningSubjectName}</span>
+                          <span
+                            className="text-xs text-gray-600 block overflow-hidden"
+                            style={{
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                              overflow: 'hidden',
+                            }}
+                            title={task.planningSubjectName}
+                          >
+                            {task.planningSubjectName}
+                          </span>
                         </td>
 
                         {/* פרויקט */}
                         <td className="px-3 py-2 w-48">
-                          <span className="text-xs text-gray-600">{task.projectName}</span>
+                          <span
+                            className="text-xs text-gray-600 block overflow-hidden"
+                            style={{
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                              overflow: 'hidden',
+                            }}
+                            title={task.projectName}
+                          >
+                            {task.projectName}
+                          </span>
                         </td>
 
                         {/* סטטוס */}
-                        <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
-                          <div className="flex flex-col gap-1">
-                            <select
-                              value={String(statusOptions.find(s => s.name === task.statusName)?.id ?? task.statuID ?? 0)}
-                              onChange={e => handleTaskStatusChange(task.id, Number(e.target.value))}
-                              disabled={task.isClosed && task.senderID !== userId}
-                              className="text-xs font-medium px-2 py-1 rounded-full border cursor-pointer focus:ring-2 focus:ring-emerald-500 w-full"
+                        <td className="px-3 py-2 w-28 min-w-[7rem]">
+                          <div className="flex flex-col gap-1 w-full">
+                            <span
+                              className="text-xs font-medium px-2 py-1 rounded-full border w-full overflow-hidden whitespace-nowrap text-ellipsis block text-right"
                               style={getStatusColorByKey(task.statuID ?? 0)}
+                              title={task.statusName}
                             >
-                              {task.statuID === 0 && !statusOptions.some(s => s.name === task.statusName) && (
-                                <option value="0">{task.statusName}</option>
-                              )}
-                              {statusOptions.map(s => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
-                            </select>
+                              {task.statusName?.trim() ? truncateTo18(task.statusName) : '-'}
+                            </span>
 
                             {(() => {
                               const pct = statuses.find(s => s.id === (task.statuID ?? 0))?.progressPercentage ?? 0;
@@ -649,49 +773,35 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
                           </div>
                         </td>
 
+                        <td className="px-3 py-2 text-center" onClick={e => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            onClick={() => { void handleDeleteBill(task.planningBillID); }}
+                            disabled={deletingBillId === task.planningBillID}
+                            className="p-1.5 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="מחק בקשת חשבון"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+
                       </tr>
                     ))}
 
                     {sorted.length === 0 && (
                       <tr>
-                        <td colSpan={14} className="px-4 py-2 text-center text-gray-400 text-xs">
+                        <td colSpan={16} className="px-4 py-2 text-center text-gray-400 text-xs">
                           לא נמצאו משימות
                         </td>
                       </tr>
                     )}
                   </tbody>
                 </table>
-              </div>
+              </HorizontalScrollContainer>
             </div>
           );
         })}
       </div>
-
-      {/* ── מקטע סיכום ── */}
-      {(() => {
-        const totalRequests = columnFilteredTasks.length;
-        const submittedBills = columnFilteredTasks.filter((task) => task.isClosed).length;
-        const pendingBills = totalRequests - submittedBills;
-
-        return (
-          <div className="bg-white border border-gray-200 rounded-xl p-4 mt-2 mb-2">
-            <div className="grid grid-cols-3 gap-4 text-center">
-              <div>
-                <div className="text-2xl font-bold text-blue-600">{totalRequests}</div>
-                <div className="text-xs text-gray-500 mt-1">בקשות להגשת חשבונות</div>
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-emerald-600">{submittedBills}</div>
-                <div className="text-xs text-gray-500 mt-1">חשבונות שהוגשו</div>
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-amber-600">{pendingBills}</div>
-                <div className="text-xs text-gray-500 mt-1">חשבונות להגשה</div>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
 
       {/* ── מקטע הערות ── */}
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 mt-4">
@@ -702,11 +812,11 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
         <ul className="space-y-2">
           <li className="flex items-start gap-2 text-sm text-amber-800">
             <span className="text-amber-500 mt-0.5">•</span>
-            <span>רשימת המשימות אשר נפתחה בקשה להגשת חשבון</span>
+            <span><strong>סטטוס חשבונות:</strong> בבורד זה יוצגו אך ורק משימות שעבורן נפתחה בקשה פעילה להגשת חשבון.</span>
           </li>
           <li className="flex items-start gap-2 text-sm text-amber-800">
             <span className="text-amber-500 mt-0.5">•</span>
-            <span>אפשר לשנות תצוגה לרשימה, לקבץ לפי קטגוריה, עדיפות ועוד</span>
+            <span><strong>ניהול תצוגה וחיתוכים:</strong> ניתן לשנות את מבנה התצוגה מרשימה לקיבוץ ולסנן את המשימות באופן דינמי</span>
           </li>
         </ul>
       </div>
@@ -735,8 +845,9 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
       {selectedTask && (
         <TaskCard
           task={selectedTask}
+          readOnly
           onClose={() => setSelectedTask(null)}
-          onUpdate={(updatedTask, employeeLinks, options) => { void handleTaskUpdateFromCard(updatedTask, employeeLinks, options); setSelectedTask(null); }}
+          onUpdate={() => {}}
           viewMode="myTasks"
           statuses={statuses}
           priorities={priorities}
@@ -746,9 +857,11 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
       {showChatModal && chatTask && (
         <ChatModal
           task={chatTask}
-          setTask={setChatTask}
+          setTask={updater => setChatTask(prev => (
+            typeof updater === 'function' ? updater(prev) as BillTaskReview | null : updater as BillTaskReview | null
+          ))}
           onClose={() => {
-            if (chatTask?.hasChat) onTasksUpdate(tasks.map(t => t.id === chatTask.id ? { ...t, hasChat: true } : t));
+            if (chatTask?.hasChat) onTasksUpdate(tasks.map(t => t.planningBillID === chatTask.planningBillID ? { ...t, hasChat: true } : t));
             setShowChatModal(false);
           }}
         />
@@ -761,6 +874,19 @@ export default function BillTasks({ tasks, onTaskUpdate, onTasksUpdate }: BillTa
           onClose={() => { setShowSubContractsModal(false); setSubContractsTask(null); }}
         />
       )}
+
+      <MessageBox
+        isOpen={messageBox.isOpen}
+        onClose={closeMessageBox}
+        title={messageBox.title}
+        message={messageBox.message}
+        type={messageBox.type}
+        confirmText={messageBox.confirmText}
+        cancelText={messageBox.cancelText}
+        showCancel={messageBox.showCancel}
+        onConfirm={messageBox.onConfirm}
+        onCancel={messageBox.onCancel}
+      />
     </>
   );
 }

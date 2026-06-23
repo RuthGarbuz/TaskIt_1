@@ -13,6 +13,15 @@ export interface EmployeeBasic {
   name: string;
 }
 
+const normalizeEmployeeBasic = (raw: unknown): EmployeeBasic | null => {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const id = Number(r.id ?? r.Id ?? r.employeeId ?? r.EmployeeId ?? 0);
+  const name = String(r.name ?? r.Name ?? r.employeeName ?? r.EmployeeName ?? '').trim();
+  if (!id || !name) return null;
+  return { id, name };
+};
+
 /**
  * Matches server `DeleteRequest`: `Id` is bound from the route; `Database` from query (`database`).
  * Adjust the path if your controller uses a different route template.
@@ -93,8 +102,12 @@ export const getEmployees = async (): Promise<EmployeeBasic[]> => {
       throw new Error(`Failed to fetch employees: ${response.statusText}`);
     }
 
-    const data: EmployeeBasic[] = await response.json();
-    return data;
+    const data = await response.json();
+    const list = Array.isArray(data) ? data : [];
+    return list
+      .map(normalizeEmployeeBasic)
+      .filter((e): e is EmployeeBasic => e != null)
+      .sort((a, b) => a.name.localeCompare(b.name, 'he'));
   } catch (error) {
     console.error('Error fetching employees:', error);
     throw error;
@@ -244,7 +257,6 @@ export const deletePlanningSubjectTemplate = async (id: number): Promise<void> =
   }
   try {
     const user = getAuthenticatedUser();
-   
     const endpoint = buildEndpoint(
           user.urlConnection,
           "/TemplatesSettings/DeleteSubject",

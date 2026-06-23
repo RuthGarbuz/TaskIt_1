@@ -1,4 +1,4 @@
-import type { GeneralSettings, WorkCapacitySettingsResult, EmployeeWorkCapacityUpdate, EmployeeWorkingSetting, StatusItem, PriorityItem } from "../types/settings";
+import type { GeneralSettings, WorkCapacitySettingsResult, EmployeeWorkCapacityUpdate, EmployeeWorkingSetting, StatusItem, PriorityItem, DBDetailsResult, StudioDepartmentType } from "../types/settings";
 import authService from "./authService";
 
 const getAuthenticatedUser = () => {
@@ -86,6 +86,77 @@ export const getNumberOfHours = async (): Promise<number | null> => {
   }
 };
 
+export const getDBDetails = async (projectId?: number): Promise<DBDetailsResult | null> => {
+  try {
+    const user = getAuthenticatedUser();
+
+    if (projectId == null || !Number.isFinite(projectId) || projectId <= 0) {
+      return null;
+    }
+
+    // Matches [HttpGet("db-details")] GetDBDetails([FromQuery] string database, [FromQuery] int projectId)
+    const qs = new URLSearchParams({
+      database: user.dataBase,
+      projectId: String(Math.trunc(projectId)),
+    });
+    const endpoint = buildEndpoint(
+      user.urlConnection,
+      `/Settings/db-details?${qs.toString()}`,
+    );
+
+    const response = await authService.makeAuthenticatedRequest(endpoint, buildGetOptions());
+
+    if (!response.ok) {
+      if (response.status === 404) return null;
+      const errorText = await response.text().catch(() => '');
+      throw new Error(
+        `Failed to fetch DB details: ${response.status} ${response.statusText}${errorText ? ` — ${errorText}` : ''}`.trim(),
+      );
+    }
+
+    const data = await response.json();
+    if (!data) return null;
+
+    return {
+      profitPercentage: Number(data.profitPercentage ?? data.ProfitPercentage ?? 0),
+      hourlyRate: Number(data.hourlyRate ?? data.HourlyRate ?? 0),
+      subcontractCost: Number(data.subcontractCost ?? data.SubcontractCost ?? 0),
+      monthlyJobScopeHours: Number(data.monthlyJobScopeHours ?? data.MonthlyJobScopeHours ?? 0),
+    };
+  } catch (error) {
+    console.error('Error fetching DB details:', error);
+    throw error;
+  }
+};
+
+export const getStudioDepartments = async (): Promise<StudioDepartmentType[]> => {
+  try {
+    const user = getAuthenticatedUser();
+
+    const endpoint = buildEndpoint(
+      user.urlConnection,
+      `/Settings/studio-departments?database=${encodeURIComponent(user.dataBase)}`
+    );
+    const response = await authService.makeAuthenticatedRequest(endpoint, buildGetOptions());
+
+    if (!response.ok) {
+      if (response.status === 404) return [];
+      throw new Error(`Failed to fetch studio departments: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    if (!Array.isArray(data)) return [];
+
+    return data.map((item: any) => ({
+      id: Number(item?.id ?? item?.ID ?? 0),
+      name: String(item?.name ?? item?.Name ?? '')
+    }));
+  } catch (error) {
+    console.error('Error fetching studio departments:', error);
+    throw error;
+  }
+};
+
 export const updateGeneralSettings = async (settings: GeneralSettings): Promise<boolean> => {
   try {
     const user = getAuthenticatedUser();
@@ -101,7 +172,8 @@ export const updateGeneralSettings = async (settings: GeneralSettings): Promise<
   MonthlyJobScopeHours: settings.monthlyJobScopeHours,
   NumberOfHours: numberOfHours,
   BillRequestSent: settings.billRequestSent,
-  ClosedByStatusChange: settings.closedByStatusChange
+  ClosedByStatusChange: settings.closedByStatusChange,
+  IsShowNotification: settings.isShowNotification
 };
     
     const endpoint = buildEndpoint(user.urlConnection, "/Settings/UpdateGeneralSettings");

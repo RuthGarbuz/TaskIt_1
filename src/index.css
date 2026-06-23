@@ -2,6 +2,178 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-gray-50 text-gray-900;
+  }
+
+  .dark body {
+    @apply bg-gray-900;
+  }
+}
+
+@layer components {
+  /*
+   * Dark mode text contrast:
+   * - On dark shells → light/white neutral text
+   * - On .bright-surface (pastel/white chips, badges) → dark neutral text
+   */
+
+  .dark :is(
+    .dark-surface,
+    .modal-shell,
+    .task-controls-panel,
+    .task-group-card,
+    .task-summary-panel,
+    .task-table-shell,
+    .task-filter-popover,
+    .app-panel
+  ) {
+    color: #f3f4f6;
+  }
+
+  .dark :is(
+    .dark-surface,
+    .modal-shell,
+    .task-controls-panel,
+    .task-group-card,
+    .task-summary-panel,
+    .task-table-shell,
+    .task-filter-popover,
+    .app-panel
+  ) :where(.text-gray-900, .text-gray-800, .text-gray-700) {
+    color: #ffffff;
+  }
+
+  .dark :is(
+    .dark-surface,
+    .modal-shell,
+    .task-controls-panel,
+    .task-group-card,
+    .task-summary-panel,
+    .task-table-shell,
+    .task-filter-popover,
+    .app-panel
+  ) :where(.text-gray-600) {
+    color: #d1d5db;
+  }
+
+  .dark :is(
+    .dark-surface,
+    .modal-shell,
+    .task-controls-panel,
+    .task-group-card,
+    .task-summary-panel,
+    .task-table-shell,
+    .task-filter-popover,
+    .app-panel
+  ) :where(.text-gray-500, .text-gray-400) {
+    color: #9ca3af;
+  }
+
+  /* Bright backgrounds always keep dark neutral text */
+  .dark .bright-surface:is(.text-gray-900, .text-gray-800, .text-gray-700),
+  .dark .bright-surface :where(.text-gray-900, .text-gray-800, .text-gray-700) {
+    color: #1f2937;
+  }
+
+  .dark .bright-surface:is(.text-gray-600, .text-gray-500, .text-gray-400),
+  .dark .bright-surface :where(.text-gray-600, .text-gray-500, .text-gray-400) {
+    color: #4b5563;
+  }
+
+  .task-controls-panel {
+    @apply bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6;
+  }
+
+  .dark .task-controls-panel {
+    @apply bg-gray-800 border-gray-700 shadow-none;
+  }
+
+  .task-group-card {
+    @apply bg-white rounded-xl shadow-sm border border-gray-200;
+  }
+
+  .dark .task-group-card {
+    @apply bg-gray-800 border-gray-700 shadow-none;
+  }
+
+  .task-summary-panel {
+    @apply bg-white border border-gray-200 rounded-xl p-4 mt-2 mb-2;
+  }
+
+  .dark .task-summary-panel {
+    @apply bg-gray-800 border-gray-700;
+  }
+
+  .dark .task-summary-panel .text-gray-500 {
+    color: #9ca3af; /* gray-400 */
+  }
+
+  .dark .task-table-shell table tbody {
+    @apply divide-gray-700;
+  }
+
+  .dark .task-table-shell table thead {
+    @apply bg-gray-800 border-gray-700;
+  }
+
+  .dark .task-table-shell table thead th {
+    color: #ffffff;
+  }
+
+  .dark .task-table-shell table tbody tr {
+    color: #f3f4f6;
+  }
+
+  .dark .task-table-shell table tbody tr:hover {
+    @apply bg-emerald-900/20;
+  }
+
+  .dark .task-filter-popover button.text-gray-500 {
+    color: #9ca3af; /* gray-400 */
+  }
+
+  .dark .task-filter-popover button.text-gray-500:hover {
+    @apply bg-gray-700;
+  }
+
+  /* Settings panel — dark surfaces inside app-panel */
+  .dark .app-panel .bg-gray-50:not(.bright-surface) {
+    background-color: rgb(17 24 39 / 0.45);
+    border-color: #374151;
+  }
+
+  .dark .app-panel .bg-gray-100:not(.bright-surface) {
+    background-color: #374151;
+    border-color: #4b5563;
+  }
+
+  .dark .app-panel .bg-white:not(.bright-surface) {
+    background-color: #374151;
+    border-color: #4b5563;
+  }
+
+  .dark .app-panel input:not([type='checkbox']):not([type='radio']):not([type='color']),
+  .dark .app-panel select,
+  .dark .app-panel textarea {
+    background-color: #374151;
+    border-color: #4b5563;
+    color: #f9fafb;
+  }
+
+  .dark .app-panel input:disabled,
+  .dark .app-panel select:disabled,
+  .dark .app-panel textarea:disabled {
+    background-color: #1f2937;
+    color: #9ca3af;
+  }
+}
+
 /* Sidebar custom scrollbar */
 .sidebar-scroll {
 	scrollbar-width: thin;
@@ -31,4 +203,56 @@
   bottom: 0;
   overflow-x: auto;
   overflow-y: visible;
+}
+
+.horizontal-scroll-content {
+  overflow-x: auto;
+  overflow-y: visible;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.horizontal-scroll-content::-webkit-scrollbar {
+  display: none;
+}
+
+.horizontal-scroll-track {
+  position: sticky;
+  bottom: 0;
+  z-index: 30;
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 14px;
+  margin-top: -1px;
+  background: #f3f4f6;
+  border-top: 1px solid #e5e7eb;
+  scrollbar-width: thin;
+  scrollbar-color: #9ca3af #f3f4f6;
+}
+
+.dark .horizontal-scroll-track {
+  background: #1f2937;
+  border-top-color: #374151;
+  scrollbar-color: #6b7280 #1f2937;
+}
+
+.horizontal-scroll-track::-webkit-scrollbar {
+  height: 10px;
+}
+
+.horizontal-scroll-track::-webkit-scrollbar-track {
+  background: #f3f4f6;
+}
+
+.dark .horizontal-scroll-track::-webkit-scrollbar-track {
+  background: #1f2937;
+}
+
+.horizontal-scroll-track::-webkit-scrollbar-thumb {
+  background: #9ca3af;
+  border-radius: 9999px;
+}
+
+.dark .horizontal-scroll-track::-webkit-scrollbar-thumb {
+  background: #6b7280;
 }

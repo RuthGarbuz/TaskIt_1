@@ -1,20 +1,18 @@
 import { useEffect, useState } from 'react';
 import { MessageSquare, X, } from 'lucide-react';
 import type { TaskChatMessage, TaskReview } from '../../Data/projectsData';
-import { getChatData, insertChatAsync } from '../../services/taskService';
+import { getChatData, insertChatAsync } from '../../services/chatService';
 
 interface ChatModalProps {
   task: TaskReview;
   setTask: React.Dispatch<React.SetStateAction<TaskReview | null>>;
   onClose: () => void;
-  
 }
 
 export default function ChatModal({ task, onClose ,setTask}: ChatModalProps) {
   const [messages, setMessages] = useState<TaskChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
   const [chatMessage, setChatMessage] = useState('');
   const [showLinkInput, setShowLinkInput] = useState(false);
   const [linkUrl, setLinkUrl] = useState('');

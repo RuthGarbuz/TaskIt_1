@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { X, Plus, Users, Search } from 'lucide-react';
+import { X, Plus, Users } from 'lucide-react';
+import SearchInput from '../pages/shared/SearchInput';
 //import type { Employee } from '../Data/templatesData';
 import { initialEmployees, type Employee } from '../Data/templatesData';
 
@@ -45,18 +46,14 @@ export default function EmployeeModal({ isOpen, onClose, selectedEmployeeIds, on
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" dir="rtl">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-gray-200">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" dir="rtl">
+      <div className="modal-shell dark-surface bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-2xl max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
           <div className="flex items-center gap-2">
-            <Users size={20} className="text-purple-600" />
-            <h2 className="text-lg font-bold text-gray-800">ניהול עובדים - {title}</h2>
+            <Users size={20} className="text-purple-600 dark:text-purple-400" />
+            <h2 className="text-lg font-bold text-gray-800 dark:text-white">ניהול עובדים - {title}</h2>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
-          >
+          <button onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors text-gray-500 dark:text-gray-400">
             <X size={20} />
           </button>
         </div>
@@ -64,16 +61,13 @@ export default function EmployeeModal({ isOpen, onClose, selectedEmployeeIds, on
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {/* Search */}
-          <div className="relative">
-            <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="חפש עובד..."
-              className="w-full pr-10 pl-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 text-sm"
-            />
-          </div>
+          <SearchInput
+            value={searchQuery}
+            onChange={setSearchQuery}
+            placeholder="חפש עובד..."
+            iconSize={16}
+            className="text-sm focus:ring-purple-500"
+          />
 
           {/* Selected Employees */}
           {selected.length > 0 && (

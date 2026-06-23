@@ -1,4 +1,6 @@
-import { Search, Filter, LayoutGrid, Plus, List, RefreshCw, FileText, Printer } from 'lucide-react';
+import { Filter, LayoutGrid, Plus, List, RefreshCw, Printer } from 'lucide-react';
+import { TASK_CONTROLS_PANEL, TASK_CTRL_BTN } from '../tasks/taskViewTheme';
+import SearchInput from '../shared/SearchInput';
 
 interface HoursReportHeaderProps {
   searchQuery: string;
@@ -37,7 +39,7 @@ export default function HoursReportHeader({
   };
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6">
+    <div className={TASK_CONTROLS_PANEL}>
       <div className="flex items-center justify-between gap-4 flex-wrap">
         {/* Right side: רשימה, סה"כ שעות, סה"כ דיווחים */}
         <div className="flex gap-2 items-center">
@@ -58,8 +60,8 @@ export default function HoursReportHeader({
           </button>
           {/* Total Hours Badge */}
           {showCount && (
-            <div className="flex items-center gap-1.5 px-3 py-2 bg-teal-50 border border-teal-200 rounded-lg">
-              <span className="text-xs text-teal-600 font-semibold">סה"כ שעות:</span>
+            <div className="flex items-center gap-1.5 px-3 py-2 bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800 rounded-lg">
+              <span className="text-xs text-teal-600 dark:text-teal-300 font-semibold">סה"כ שעות:</span>
               <span className="inline-flex items-center justify-center px-2 py-0.5 bg-teal-500 text-white rounded-full text-xs font-bold min-w-[32px]">
                 {formatHours(totalHours)}
               </span>
@@ -68,13 +70,13 @@ export default function HoursReportHeader({
 
           {/* Total Reports Badge */}
           {showCount && (
-            <div className="flex items-center gap-1.5 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg">
-              <span className="text-xs text-blue-600 font-semibold">סה"כ דיווחים:</span>
+            <div className="flex items-center gap-1.5 px-3 py-2 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 rounded-lg">
+              <span className="text-xs text-blue-600 dark:text-blue-300 font-semibold">סה"כ דיווחים:</span>
               <span className="inline-flex items-center justify-center px-2 py-0.5 bg-blue-500 text-white rounded-full text-xs font-bold min-w-[32px]">
                 {filteredReportsCount}
               </span>
               {isFiltered && totalReportsCount !== undefined && filteredReportsCount !== totalReportsCount && (
-                <span className="text-xs text-gray-400">מתוך {totalReportsCount}</span>
+                <span className="text-xs text-gray-400 dark:text-gray-500">מתוך {totalReportsCount}</span>
               )}
             </div>
           )}
@@ -82,23 +84,19 @@ export default function HoursReportHeader({
 
         {/* Middle: Search */}
         <div className="flex-1 max-w-md">
-          <div className="relative">
-            <Search size={20} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="חפש דיווחים..."
-              className="w-full pr-10 pl-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-            />
-          </div>
+          <SearchInput
+            value={searchQuery}
+            onChange={onSearchChange}
+            placeholder="חפש דיווחים..."
+            iconSize={20}
+          />
         </div>
 
         {/* Left side: תצוגה, סינון, דיווח חדש */}
         <div className="flex items-center gap-3">
           <button
             onClick={onShowViewModal}
-            className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors border border-gray-300"
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${TASK_CTRL_BTN}`}
           >
             <LayoutGrid size={18} />
             <span className="font-medium">תצוגה</span>
@@ -109,7 +107,7 @@ export default function HoursReportHeader({
             className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors border ${
               activeFiltersCount > 0
                 ? 'bg-emerald-500 text-white border-emerald-600'
-                : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300'
+                : `${TASK_CTRL_BTN}`
             }`}
           >
             <Filter size={18} />
@@ -123,13 +121,13 @@ export default function HoursReportHeader({
 
           <button
             onClick={onRefresh}
-            className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors border border-gray-300"
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${TASK_CTRL_BTN}`}
           >
             <RefreshCw size={20} />
           </button>
           <button
               onClick={onShowReportModal}
-              className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors border border-gray-300"
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${TASK_CTRL_BTN}`}
               title="הדפסה"
             >
               <Printer size={18} />

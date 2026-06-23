@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell, User } from 'lucide-react';
 import type { CurrentView } from '../types';
 import NotificationsPanel from "./NotificationsPanel";
-import type { EmployeeNotification, TaskChatMessage, TaskReview } from '../Data/projectsData';
+import AppearanceToggle from './AppearanceToggle';
+import type { EmployeeNotification, TaskReview } from '../Data/projectsData';
 import ChatModal from '../pages/tasks/ChatModal';
 import { getEmployeeNotifications, getUnreadNotificationsCount, updateNotificationReadState } from '../services/chatService';
 
@@ -31,7 +32,7 @@ export default function Header({
   const [notifications, setNotifications] = useState<EmployeeNotification[]>(initialNotifications);
   const [unreadCount, setUnreadCount] = useState(initialNotifications.filter((n) => !n.isRead).length);
   const [chatTask, setChatTask] = useState<TaskReview | null>(null);
-  const [chatInitialMessages, setChatInitialMessages] = useState<TaskChatMessage[]>([]);
+  //const [chatInitialMessages, setChatInitialMessages] = useState<TaskChatMessage[]>([]);
   const bellRef = useRef<HTMLButtonElement>(null);
 
   const refreshUnreadCount = useCallback(async () => {
@@ -80,7 +81,7 @@ export default function Header({
     id: n.taskId ?? 0,
     planningStepID: 0,
     name: n.name ?? '',
-    subject:  n.message ?? '',
+    subject:  n.name ?? '',
     planningSubjectName: n.planningSubjectName ?? '',
     percentage: 0,
     workHours: 0,
@@ -125,15 +126,15 @@ export default function Header({
     }
 
     setShowNotifications(false);
-    setChatInitialMessages([
-      {
-        id: notification.id,
-        senderID: 0,
-        senderName: notification.senderName ?? '',
-        createDate: notification.createDate ?? new Date().toISOString(),
-        message: notification.message ?? ''
-      }
-    ]);
+    // setChatInitialMessages([
+    //   {
+    //     id: notification.id,
+    //     senderID: 0,
+    //     senderName: notification.senderName ?? '',
+    //     createDate: notification.createDate ?? new Date().toISOString(),
+    //     message: notification.message ?? ''
+    //   }
+    // ]);
     setChatTask(toChatTask(notification));
     await refreshUnreadCount();
   };
@@ -157,14 +158,15 @@ export default function Header({
 
   const getViewTitle = () => {
     switch (currentView) {
-      case 'myTasks':     return 'TaskIt - משימות שלי';
-      case 'allTasks':    return 'TaskIt - כל המשימות';
-      case 'projects':    return 'TaskIt - פרויקטים';
-      case 'settings':    return 'TaskIt - הגדרות';
-      case 'hoursReport': return 'TaskIt - דיווח שעות';
-      case 'workload':    return 'TaskIt - עומס עבודה';
-      case 'billTasks':   return 'TaskIt - חשבונות להגשה';
-      default:            return 'TaskIt';
+          case 'myTasks':     return 'PlanIt - משימות שלי';
+          case 'allTasks':    return 'PlanIt - כל המשימות';
+          case 'projects':    return 'PlanIt - פרויקטים';
+          case 'settings':    return 'PlanIt - הגדרות';
+          case 'hoursReport': return 'PlanIt - דיווח שעות';
+          case 'workload':    return 'PlanIt - עומס עבודה';
+          case 'billTasks':   return 'PlanIt - חשבונות להגשה';
+          case 'gantt':   return 'PlanIt - גאנט שלבים';
+          default:            return 'PlanIt';
     }
   };
 
@@ -181,25 +183,27 @@ export default function Header({
 
   return (
     <>
-      <header className="bg-white border-b border-gray-200 px-6 py-4">
+      <header className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 px-6 py-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <img src="/TaskIt_Logo.png" alt="TaskIt Logo" className="w-12 h-12 object-contain" />
-            <div>
-              <h1 className="text-xl font-bold text-gray-800">{getViewTitle()}</h1>
-              <p className="text-sm text-gray-500">ניהול יעיל של המשימות</p>
+          <img src={`${import.meta.env.BASE_URL}logo.svg`} alt="PlanIt Logo" className="w-12 h-12 object-contain" />
+          <div>
+              <h1 className="text-xl font-bold text-gray-800 dark:text-white">{getViewTitle()}</h1>
+              <p className="text-sm text-gray-500 dark:text-gray-300">ניהול יעיל של המשימות</p>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
+            <AppearanceToggle />
+
             {/* כפתור התראות */}
             <button
               ref={bellRef}
               onClick={() => setShowNotifications(prev => !prev)}
-              className="relative p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              className="relative p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
               title="התראות"
             >
-              <Bell size={20} className={showNotifications ? 'text-blue-600' : 'text-gray-600'} />
+              <Bell size={20} className={showNotifications ? 'text-blue-600 dark:text-blue-400' : 'text-gray-600 dark:text-gray-300'} />
               {unreadCount > 0 && (
                 <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1">
                   {unreadCount > 99 ? '99+' : unreadCount}
@@ -208,9 +212,9 @@ export default function Header({
             </button>
 
             {/* משתמש */}
-            <div className="flex items-center gap-2 bg-gray-100 px-4 py-2 rounded-lg">
-              <User size={18} className="text-gray-600" />
-              <span className="text-sm font-medium text-gray-700">{username}</span>
+            <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-800 px-4 py-2 rounded-lg">
+              <User size={18} className="text-gray-600 dark:text-gray-300" />
+              <span className="text-sm font-medium text-gray-700 dark:text-white">{username}</span>
             </div>
           </div>
         </div>
@@ -246,7 +250,7 @@ export default function Header({
           //initialMessages={chatInitialMessages}
           onClose={() => {
             setChatTask(null);
-            setChatInitialMessages([]);
+           // setChatInitialMessages([]);
           }}
         />
       )}

@@ -1,4 +1,5 @@
 import { X } from 'lucide-react';
+import { MODAL_CLOSE_BTN, MODAL_HEADER, MODAL_OVERLAY, MODAL_SHELL, MODAL_TITLE } from '../pages/tasks/taskViewTheme';
 
 interface ViewModalProps {
   activeView: 'all' | 'status' | 'urgency' | 'project' | 'date';
@@ -19,12 +20,12 @@ export default function ViewModal({ activeView, onViewChange, onClose, hideUrgen
   const views = allViews.filter((view) => !(hideUrgencyOption && view.value === 'urgency'));
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
-        <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-          <h2 className="text-xl font-bold text-gray-800">בחר תצוגה</h2>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg">
-            <X size={20} className="text-gray-600" />
+    <div className={MODAL_OVERLAY}>
+      <div className={`${MODAL_SHELL} w-full max-w-md`}>
+        <div className={MODAL_HEADER}>
+          <h2 className={MODAL_TITLE}>בחר תצוגה</h2>
+          <button onClick={onClose} className={MODAL_CLOSE_BTN}>
+            <X size={20} className="text-gray-600 dark:text-gray-300" />
           </button>
         </div>
         <div className="p-6 space-y-2">
@@ -34,8 +35,8 @@ export default function ViewModal({ activeView, onViewChange, onClose, hideUrgen
               onClick={() => onViewChange(view.value)}
               className={`w-full text-right px-4 py-3 rounded-lg font-medium transition-colors ${
                 activeView === view.value 
-                  ? 'bg-emerald-50 text-emerald-700 border-2 border-emerald-200' 
-                  : 'hover:bg-gray-50 border-2 border-transparent'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-2 border-emerald-200 dark:border-emerald-700' 
+                  : 'hover:bg-gray-50 dark:hover:bg-gray-700 border-2 border-transparent text-gray-800'
               }`}
             >
               {view.label}

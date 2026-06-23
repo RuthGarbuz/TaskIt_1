@@ -1,4 +1,6 @@
 import { X, Calendar, User, Briefcase } from 'lucide-react';
+import { DateInput } from '../shared/DateInput';
+import { MODAL_CLOSE_BTN, MODAL_FIELD, MODAL_FOOTER, MODAL_HEADER, MODAL_LABEL, MODAL_TITLE, TASK_CTRL_BTN } from '../tasks/taskViewTheme';
 
 export interface HoursReportFilters {
   projects: string[];
@@ -41,13 +43,13 @@ export default function HoursReportFilterModal({
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto">
+      <div className="modal-shell dark-surface bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-2xl max-h-[85vh] overflow-y-auto">
 
         {/* Header */}
-        <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between rounded-t-2xl z-10">
-          <h2 className="text-xl font-bold text-gray-800">סינון דיווחי שעות</h2>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-            <X size={20} className="text-gray-600" />
+        <div className={`sticky top-0 ${MODAL_HEADER} bg-white dark:bg-gray-800 rounded-t-2xl z-10`}>
+          <h2 className={MODAL_TITLE}>סינון דיווחי שעות</h2>
+          <button onClick={onClose} className={MODAL_CLOSE_BTN}>
+            <X size={20} className="text-gray-600 dark:text-gray-300" />
           </button>
         </div>
 
@@ -58,20 +60,20 @@ export default function HoursReportFilterModal({
 
             {/* Projects */}
             <div>
-              <h3 className="font-semibold mb-3 text-gray-800 flex items-center gap-2">
+              <h3 className={`font-semibold mb-3 flex items-center gap-2 ${MODAL_LABEL} !text-sm text-gray-800 dark:text-white`}>
                 <Briefcase size={16} className="text-teal-600" />
                 פרויקט
               </h3>
               <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
                 {allProjects.map(p => (
-                  <label key={p} className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded-lg cursor-pointer">
+                  <label key={p} className="flex items-center gap-3 p-2 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg cursor-pointer">
                     <input
                       type="checkbox"
                       checked={filters.projects.includes(p)}
                       onChange={() => toggle('projects', p)}
                       className="w-4 h-4 rounded text-teal-500 focus:ring-teal-500"
                     />
-                    <span className="text-sm text-gray-700">{p}</span>
+                    <span className="text-sm text-gray-700 dark:text-gray-200">{p}</span>
                   </label>
                 ))}
                 {allProjects.length === 0 && (
@@ -82,20 +84,20 @@ export default function HoursReportFilterModal({
 
             {/* Reporters */}
             <div>
-              <h3 className="font-semibold mb-3 text-gray-800 flex items-center gap-2">
+              <h3 className={`font-semibold mb-3 flex items-center gap-2 ${MODAL_LABEL} !text-sm text-gray-800 dark:text-white`}>
                 <User size={16} className="text-teal-600" />
                 עובד מדווח
               </h3>
               <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
                 {allReporters.map(r => (
-                  <label key={r} className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded-lg cursor-pointer">
+                  <label key={r} className="flex items-center gap-3 p-2 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg cursor-pointer">
                     <input
                       type="checkbox"
                       checked={filters.reporters.includes(r)}
                       onChange={() => toggle('reporters', r)}
                       className="w-4 h-4 rounded text-teal-500 focus:ring-teal-500"
                     />
-                    <span className="text-sm text-gray-700">{r}</span>
+                    <span className="text-sm text-gray-700 dark:text-gray-200">{r}</span>
                   </label>
                 ))}
                 {allReporters.length === 0 && (
@@ -106,38 +108,36 @@ export default function HoursReportFilterModal({
           </div>
 
           {/* Date Range */}
-          <div className="border-t pt-5">
-            <h3 className="font-semibold mb-3 text-gray-800 flex items-center gap-2">
+          <div className="border-t border-gray-200 dark:border-gray-700 pt-5">
+            <h3 className={`font-semibold mb-3 flex items-center gap-2 text-gray-800 dark:text-white`}>
               <Calendar size={16} className="text-teal-600" />
               טווח תאריכים
             </h3>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm text-gray-600 mb-1">מתאריך</label>
-                <input
-                  type="date"
+                <label className={`block mb-1 ${MODAL_LABEL}`}>מתאריך</label>
+                <DateInput
                   value={filters.dateFrom}
-                  onChange={e => onChange({ ...filters, dateFrom: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                  onChange={v => onChange({ ...filters, dateFrom: v })}
+                  className={MODAL_FIELD}
                 />
               </div>
               <div>
-                <label className="block text-sm text-gray-600 mb-1">עד תאריך</label>
-                <input
-                  type="date"
+                <label className={`block mb-1 ${MODAL_LABEL}`}>עד תאריך</label>
+                <DateInput
                   value={filters.dateTo}
-                  onChange={e => onChange({ ...filters, dateTo: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                  onChange={v => onChange({ ...filters, dateTo: v })}
+                  className={MODAL_FIELD}
                 />
               </div>
             </div>
           </div>
 
           {/* Actions */}
-          <div className="flex gap-3 pt-2 border-t">
+          <div className={`flex gap-3 pt-2 border-t border-gray-200 dark:border-gray-700 ${MODAL_FOOTER} !px-0`}>
             <button
               onClick={onClear}
-              className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 font-medium transition-colors text-gray-700"
+              className={`flex-1 px-4 py-2.5 rounded-lg font-medium transition-colors ${TASK_CTRL_BTN}`}
             >
               נקה הכל
             </button>

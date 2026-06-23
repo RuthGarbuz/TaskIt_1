@@ -760,7 +760,7 @@ const employeeCountForStage = (stage: PlanningStepTemplate): number => {
                     <div className="text-center">שעות עבודה</div>
                     <div className="text-center">ימי עבודה</div>
                     <div className="text-center">משך זמן</div>
-                    <div className="text-center">תלוי בשלב</div>
+                    <div className="text-center">תלוי שלב</div>
                     <div className="text-center">קישור עובדים</div>
                   </div>
                   {/* Stage data */}

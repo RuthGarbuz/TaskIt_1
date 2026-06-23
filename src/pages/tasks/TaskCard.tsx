@@ -1,11 +1,44 @@
 import { useEffect, useState } from 'react';
-import { X, Trash2, Plus, MessageSquare } from 'lucide-react';
-import type { DependsOnStepData, DependsOnTaskData, EmployeeLink, SystemTable, TaskCardCascadeStage, TaskCardSaveOptions, TaskParentDateCascade, TaskReview, TaskStepHoursCascade } from '../../Data/projectsData';
+import { X, Trash2, Plus, MessageSquare, Paperclip } from 'lucide-react';
+import type { DependsOnStepData, DependsOnTaskData, EmployeeLink, PlanningAttachment, SystemTable, TaskCardCascadeStage, TaskCardSaveOptions, TaskParentDateCascade, TaskReview, TaskStepHoursCascade } from '../../Data/projectsData';
 import { getEmployees, type EmployeeBasic } from '../../services/templatesSettingServices';
 import { deleteTaskOrStageAsync, getDependsOnDataByIdAsync, getEmployeeLinksAsync } from '../../services/taskService';
 import { getNumberOfHours } from '../../services/settingService';
+import { getStepAttachmentsAsync, getTaskAttachmentsAsync, saveEntityAttachmentsAsync } from '../../services/projectPlanningService';
 import MessageBox from '../shared/MessageBox';
 import ChatModal from './ChatModal';
+import AttachmentsModal from '../projects/AttachmentsModal';
+import authService from '../../services/authService';
+
+const readAttachmentIsLink = (raw: Record<string, unknown>): boolean => {
+  if (typeof raw.isLink === 'boolean') return raw.isLink;
+  if (raw.attachmentType === 'link') return true;
+  if (raw.attachmentType === 'upload') return false;
+  return false;
+};
+
+const normalizePlanningAttachment = (
+  raw: PlanningAttachment | Record<string, unknown>,
+  entityType: 'step' | 'task',
+  entityId: number,
+): PlanningAttachment => {
+  const r = raw as Record<string, unknown>;
+  const isLink = readAttachmentIsLink(r);
+  return {
+    id: Number(r.id ?? 0),
+    entityType,
+    entityId,
+    employeeId: r.employeeId != null && r.employeeId !== '' ? Number(r.employeeId) : null,
+    employeeName: r.employeeName != null ? String(r.employeeName) : undefined,
+    description: String(r.description ?? ''),
+    fileLink: String(r.fileLink ?? r.FileLink ?? ''),
+    isLink,
+    fileName: r.fileName != null ? String(r.fileName) : undefined,
+    isNew: Boolean(r.isNew),
+    isModified: Boolean(r.isModified),
+    isDeleted: Boolean(r.isDeleted),
+  };
+};
 
 const DEFAULT_WORK_HOURS_PER_DAY = 8.0;
 const HOURS_EPS = 1e-4;
@@ -18,10 +51,14 @@ interface TaskCardProps {
   viewMode: 'myTasks' | 'allTasks';
   statuses: SystemTable[];
   priorities: SystemTable[];
+  /** תצוגה בלבד — חוסם עריכה (למשל מסך אישור חשבונות) */
+  readOnly?: boolean;
   /** שורת השלב (תכנון) — לבדיקת שעות מול כלל המשימות בשלב */
   planStepListTask?: TaskReview | null;
   /** כל משימות אותו שלב (ללא isPlanningSte), כולל המשימה הפתוחה */
   tasksInSameStep?: TaskReview[] | null;
+  /** כלל המשימות בהקשר הנוכחי (לרשימות/חישובים) */
+  contextTasks?: TaskReview[];
 }
 
 export default function TaskCard({
@@ -38,6 +75,12 @@ export default function TaskCard({
   const [WORK_HOURS_PER_DAY, setWORK_HOURS_PER_DAY] = useState<number>(DEFAULT_WORK_HOURS_PER_DAY);
   const [newReceiver, setNewReceiver] = useState<EmployeeBasic | null>(null);
   const [chatTask, setChatTask] = useState<TaskReview | null>(null);
+  const [showAttachModal, setShowAttachModal] = useState(false);
+  const [taskAttachments, setTaskAttachments] = useState<PlanningAttachment[]>(() =>
+    (task.attachments ?? []).map(a =>
+      normalizePlanningAttachment(a, task.isPlanningSte ? 'step' : 'task', task.id)
+    )
+  );
   const [dependsOnData, setDependsOnData] = useState<DependsOnTaskData | DependsOnStepData | null>(null);
   const [cascadeStageUpdate, setCascadeStageUpdate] = useState<TaskCardCascadeStage | null>(null);
   const [taskStepHoursCascade, setTaskStepHoursCascade] = useState<TaskStepHoursCascade | null>(null);
@@ -83,6 +126,43 @@ export default function TaskCard({
         onCancel: () => { resolve(false); closeMessageBox(); }
       });
     });
+
+  const loadAttachmentsFromServer = async (entityId: number, isPlanningStep: boolean) =>
+    isPlanningStep ? getStepAttachmentsAsync(entityId) : getTaskAttachmentsAsync(entityId);
+
+  const attachmentEntityType = editedTask.isPlanningSte ? 'step' : 'task';
+
+  const attachmentsHavePendingChanges = (attachments: PlanningAttachment[]) =>
+    attachments.some(a => a.isNew || a.isModified || a.isDeleted);
+
+  const persistAttachmentsAsync = async (attachments: PlanningAttachment[]): Promise<PlanningAttachment[]> => {
+    const normalized = attachments.map(a =>
+      normalizePlanningAttachment(a, attachmentEntityType, editedTask.id)
+    );
+    if (!editedTask.projectId) return normalized;
+    await saveEntityAttachmentsAsync(
+      editedTask.projectId,
+      attachmentEntityType,
+      editedTask.id,
+      normalized,
+    );
+    return loadAttachmentsFromServer(editedTask.id, editedTask.isPlanningSte);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadAttachments = async () => {
+      if (!editedTask.id) return;
+      try {
+        const attachments = await loadAttachmentsFromServer(editedTask.id, editedTask.isPlanningSte);
+        if (!cancelled) setTaskAttachments(attachments);
+      } catch (error) {
+        console.error('Failed to load attachments:', error);
+      }
+    };
+    void loadAttachments();
+    return () => { cancelled = true; };
+  }, [editedTask.id, editedTask.isPlanningSte]);
 
   useEffect(() => {
     const loadEmployeeLinks = async () => {
@@ -235,6 +315,11 @@ export default function TaskCard({
   };
 
   const removeReceiver = (receiverId: number) => {
+    const employee=activeLinks.find(emp => emp.employeeId === receiverId);
+    if(employee?.hoursActual && employee.hoursActual>0){
+      showMessage('לא ניתן למחוק עובד שדווח שעות על משימה', 'אזהרה', 'warning');
+      return;
+    }
     const receiverName = availableEmployees.find(emp => emp.id === receiverId)?.name;
     setEmployeeLinks(prev =>
       prev.map(link =>
@@ -261,8 +346,10 @@ export default function TaskCard({
   };
 
   const isTaskClosed = editedTask.isClosed === true;
-  const canEditFull = viewMode === 'allTasks' && !isTaskClosed;
-  const canEditStatus = (viewMode === 'myTasks' || viewMode === 'allTasks') && !isTaskClosed;
+  const canEditFull = viewMode === 'allTasks' ;
+  // const canEditStatus = (viewMode === 'myTasks' || viewMode === 'allTasks') &&
+  //  !isTaskClosed
+  
   const isDependentOnPrevious = dependsOnData?.isDependentOnPrevious
     ?? editedTask.dependsOnTaskID
     ?? editedTask.dependsOnStepID;
@@ -498,20 +585,32 @@ export default function TaskCard({
     return handleTaskWorkHoursChange(h, 'days');
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const options: TaskCardSaveOptions | undefined = (() => {
       if (!cascadeStageUpdate && !taskStepHoursCascade && !taskParentDateCascade) return undefined;
       const o: TaskCardSaveOptions = {};
+      
       if (cascadeStageUpdate) o.cascadeStage = cascadeStageUpdate;
       if (taskStepHoursCascade) o.taskStepHoursCascade = taskStepHoursCascade;
       if (taskParentDateCascade) o.taskParentDateCascade = taskParentDateCascade;
       return o;
     })();
-    if (onUpdate) onUpdate(
-      editedTask,
-      employeeLinks,
-      options
-    );
+
+    let taskToSave = editedTask;
+    if (attachmentsHavePendingChanges(taskAttachments)) {
+      try {
+        const fresh = await persistAttachmentsAsync(taskAttachments);
+        setTaskAttachments(fresh);
+        taskToSave = { ...editedTask, attachments: fresh };
+        setEditedTask(prev => ({ ...prev, attachments: fresh }));
+      } catch (error) {
+        console.error('Failed to save attachments:', error);
+        showMessage('שגיאה בשמירת קבצים וקישורים', 'שגיאה', 'error');
+        return;
+      }
+    }
+
+    if (onUpdate) onUpdate(taskToSave, employeeLinks, options);
     onClose();
   };
 
@@ -526,7 +625,23 @@ export default function TaskCard({
     setChatTask(null);
   };
 
+  const handleSaveAttachments = async (attachments: PlanningAttachment[]) => {
+    try {
+      const fresh = await persistAttachmentsAsync(attachments);
+      setTaskAttachments(fresh);
+      setEditedTask(prev => ({ ...prev, attachments: fresh }));
+      setShowAttachModal(false);
+    } catch (error) {
+      console.error('Failed to save attachments:', error);
+      showMessage('שגיאה בשמירת קבצים וקישורים', 'שגיאה', 'error');
+    }
+  };
+
   const handleDelete = async () => {
+    if(editedTask.hourReport && editedTask.hourReport>0){
+      showMessage('לא ניתן למחוק עובד שדווח שעות על משימה', 'אזהרה', 'warning');
+      return;
+    }
     const confirmed = await openConfirm('האם אתה בטוח שברצונך למחוק משימה זו?');
     if (!confirmed) return;
     await deleteTaskOrStageAsync(editedTask.id, !editedTask.isPlanningSte);
@@ -957,6 +1072,7 @@ export default function TaskCard({
   //const updatedAt = task.lastUpdate ?? '-';
 
   const activeLinks = employeeLinks.filter(l => !l.isDeleted);
+  const attachCount = taskAttachments.filter(a => !a.isDeleted).length;
   const totals = activeLinks.reduce(
     (acc, link) => ({
       percentage: acc.percentage + (link.percentage ?? 0),
@@ -976,17 +1092,21 @@ export default function TaskCard({
 
   const [activeTab, setActiveTab] = useState<'info' | 'employees'>('info');
   const fmt = formatNumberUpTo2;
+  const truncateTo16 = (value?: string) => {
+    const text = (value ?? '').trim();
+    return text.length > 16 ? `${text.slice(0, 16)}...` : text;
+  };
 
   // ── shared style tokens ──────────────────────────────────────────────────
-  const lbl = 'block text-xs text-gray-400 mb-1';
-  const readBox = 'w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-800 bg-white';
-  const inputCls = 'w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-800 bg-white focus:outline-none focus:ring-1 focus:ring-emerald-400';
+  const lbl = 'block text-xs text-gray-400 dark:text-gray-400 mb-1';
+  const readBox = 'w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-gray-700';
+  const inputCls = 'w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-gray-700 focus:outline-none focus:ring-1 focus:ring-emerald-400';
   // ────────────────────────────────────────────────────────────────────────
 
   return (
     <>
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl flex flex-col" style={{ maxHeight: '90vh' }}>
+        <div className="modal-shell dark-surface bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-4xl flex flex-col" style={{ maxHeight: '90vh' }}>
 
           {/* ── Header ── */}
           <div className="flex-shrink-0 bg-gradient-to-r from-emerald-500 to-teal-500 px-5 py-3 rounded-t-2xl flex items-center justify-between">
@@ -1060,14 +1180,34 @@ export default function TaskCard({
               {/* סטטוס */}
               <div>
                 <label className={lbl}>סטטוס</label>
-                {canEditStatus ? (
+                {
+                //canEditStatus &&
+                     (editedTask.stepDependStatusID!=3||editedTask.taskDependStatusID!=3) ? (
                   <select
                     value={String(statuses.find(s => s.name === editedTask.statusName)?.id ?? editedTask.statuID ?? 0)}
-                    onChange={e => {
+                    onChange={e => { void (async () => {
                       const id = Number(e.target.value);
                       const name = statuses.find(s => s.id === id)?.name ?? editedTask.statusName;
+                       if(viewMode==="myTasks"){
+                        const user = authService.getCurrentUser();
+                        setEmployeeLinks(prev =>
+                          prev.map(link =>
+                            link.employeeId === user.id ? { ...link, statusId: id, isModified: true } : link
+                          )
+                        );
+                      }
+                        else if (activeLinks.length > 0) {
+                        const shouldUpdateEmployees = await openConfirm('האם לעדכן סטטוס לכל העובדים?', 'עדכון סטטוס עובדים');
+                        if (shouldUpdateEmployees) {
+                          setEmployeeLinks(prev =>
+                            prev.map(link => (link.isDeleted ? link : { ...link, statusId: id, isModified: true }))
+                          );
+                        }
+                        
+                      }
+                      
                       setEditedTask({ ...editedTask, statuID: id, statusName: name });
-                    }}
+                    })(); }}
                     className={`${inputCls} font-medium cursor-pointer ${getStatusColor(editedTask.statusName)}`}
                     style={getStatusColorByKey(editedTask.statuID ?? 0)}
                   >
@@ -1148,7 +1288,7 @@ export default function TaskCard({
               </div>
             </div>
 
-            {/* ── שורה 2: משך זמן | מתאריך | עד תאריך ── */}
+            {/* ── שורה 2: משך זמן | מתאריך | עד תאריך | צ'אט/קבצים ── */}
             <div className="grid grid-cols-4 gap-3">
               {/* משך זמן */}
               <div>
@@ -1208,10 +1348,11 @@ export default function TaskCard({
                 )}
               </div>
 
-              {/* צ'אט */}
-              <div>
+              {/* צ'אט וקבצים */}
+              <div className="grid grid-cols-2 gap-3">
+                
+                <div>
                 <label className={lbl}>צ'אט</label>
-                <div className="w-full px-3 py-2 rounded-lg text-sm bg-white flex items-center justify-center">
                   <button
                     onClick={handleOpenChat}
                     className="relative p-1.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-all"
@@ -1222,15 +1363,30 @@ export default function TaskCard({
                       <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-white" />
                     )}
                   </button>
+                  </div>
+                  <div>
+                  <label className={lbl}>קבצים</label>
+                  <button
+                    onClick={() => setShowAttachModal(true)}
+                    className="relative p-1.5 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition-all"
+                    title="קבצים וקישורים"
+                  >
+                    <Paperclip size={14} />
+                    {attachCount > 0 && (
+                      <span className="absolute -top-1 -right-1 min-w-[14px] h-3.5 px-0.5 bg-red-500 rounded-full border border-white text-[9px] font-bold text-white flex items-center justify-center">
+                        {attachCount}
+                      </span>
+                    )}
+                  </button>
                 </div>
               </div>
 
             </div>
 
             {/* ── Tabs: מידע כללי | עובדים ── */}
-            <div className="border border-gray-200 rounded-xl overflow-hidden">
+            <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
               {/* Tab bar */}
-              <div className="flex border-b border-gray-200 bg-gray-50">
+              <div className="flex border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
                 {(['info', 'employees'] as const).map(tab => {
                   const labels: Record<string, string> = { info: 'מידע כללי', employees: 'עובדים' };
                   const isActive = activeTab === tab;
@@ -1240,14 +1396,14 @@ export default function TaskCard({
                       onClick={() => setActiveTab(tab)}
                       className={`px-5 py-2.5 text-sm font-medium transition-all border-b-2 -mb-px ${
                         isActive
-                          ? 'border-emerald-500 text-emerald-600 bg-white'
-                          : 'border-transparent text-gray-500 hover:text-gray-700'
+                          ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400 bg-white dark:bg-gray-800'
+                          : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-200'
                       }`}
                     >
                       {labels[tab]}
                       {tab === 'employees' && (
                         <span className={`mr-1.5 text-xs px-1.5 py-0.5 rounded-full ${
-                          isActive ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-200 text-gray-500'
+                          isActive ? 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-200' : 'bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-300'
                         }`}>
                           {activeLinks.length}
                         </span>
@@ -1258,7 +1414,7 @@ export default function TaskCard({
               </div>
 
               {/* Tab content */}
-              <div className="p-4">
+              <div className="p-2">
 
                 {/* מידע כללי */}
                 {activeTab === 'info' && (
@@ -1275,12 +1431,12 @@ export default function TaskCard({
                 {/* עובדים */}
                 {activeTab === 'employees' && (
                   <>
-                    <div className="rounded-lg border border-gray-200 overflow-hidden mb-3">
+                    <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden mb-3">
                       <table className="w-full text-xs">
                         <thead>
-                          <tr className="bg-gray-50 border-b border-gray-200">
+                          <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
                             <th className="px-3 py-2 text-right font-medium text-gray-500">עובד</th>
-                            <th className="px-3 py-2 text-center font-medium text-gray-500">סטטוס</th>
+                            <th className="px-3 py-2 text-center font-medium text-gray-500 min-w-[11rem]">סטטוס</th>
                             <th className="px-3 py-2 text-center font-medium text-gray-500">אחוז</th>
                             <th className="px-3 py-2 text-center font-medium text-gray-500">שעות עבודה</th>
                             <th className="px-3 py-2 text-center font-medium text-gray-500">שעות מדווחות</th>
@@ -1289,25 +1445,47 @@ export default function TaskCard({
                             {canEditFull && <th className="px-3 py-2 w-8" />}
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-gray-100">
+                        <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                           {activeLinks.map(link => (
-                            <tr key={link.employeeId} className="hover:bg-gray-50 transition-colors">
-                              <td className="px-3 py-2 font-medium text-gray-800">{link.employeeName}</td>
-                              <td className="px-3 py-2 text-center">{getEmployeeStatusName(link.statusId)}</td>
+                            <tr key={link.employeeId} className="hover:bg-gray-50 dark:hover:bg-gray-700/40 transition-colors">
+                              <td className="px-3 py-2 font-medium text-gray-800" title={link.employeeName}>
+                                {truncateTo16(link.employeeName)}
+                              </td>
+                              <td className="px-3 py-2 text-center min-w-[11rem]">
+                                {canEditFull ? (
+                                  <select
+                                    value={String(link.statusId ?? 0)}
+                                    onChange={e => updateEmployeeLink(link.employeeId, { statusId: Number(e.target.value), isModified: true })}
+                                    className="w-full min-w-[10rem] max-w-[14rem] px-2 py-1 text-center border border-gray-200 dark:border-gray-600 rounded text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100"
+                                    title={getEmployeeStatusName(link.statusId)}
+                                  >
+                                    <option value="0">-</option>
+                                    {statuses.map(s => (
+                                      <option key={s.id} value={String(s.id)} title={s.name}>
+                                        {truncateTo16(s.name)}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <span title={getEmployeeStatusName(link.statusId)}>
+                                    {truncateTo16(getEmployeeStatusName(link.statusId))}
+                                  </span>
+                                )}
+                              </td>
                               <td className="px-3 py-2 text-center">
                                 {canEditFull
-                                  ? <input type="number" min="0" max="100" value={fmt(link.percentage)} onChange={e => updateEmployeePercentage(link.employeeId, Number(e.target.value))} className="w-16 px-2 py-1 text-center border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400" />
+                                  ? <input type="number" min="0" max="100" value={fmt(link.percentage)} onChange={e => updateEmployeePercentage(link.employeeId, Number(e.target.value))} className="w-16 px-2 py-1 text-center border border-gray-200 dark:border-gray-600 rounded text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100" />
                                   : <span>{fmt(link.percentage)}%</span>}
                               </td>
                               <td className="px-3 py-2 text-center">
                                 {canEditFull
-                                  ? <input type="number" min="0" value={fmt(link.workHours)} onChange={e => updateEmployeeWorkHours(link.employeeId, Number(e.target.value))} className="w-16 px-2 py-1 text-center border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400" />
+                                  ? <input type="number" min="0" value={fmt(link.workHours)} onChange={e => updateEmployeeWorkHours(link.employeeId, Number(e.target.value))} className="w-16 px-2 py-1 text-center border border-gray-200 dark:border-gray-600 rounded text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100" />
                                   : <span>{fmt(link.workHours)}</span>}
                               </td>
                               <td className="px-3 py-2 text-center">{fmt(link.hoursActual ?? 0)}</td>
                               <td className="px-3 py-2 text-center">
                                 {canEditFull
-                                  ? <input type="number" min="0" value={fmt(link.workDays)} onChange={e => updateEmployeeWorkDays(link.employeeId, Number(e.target.value))} className="w-16 px-2 py-1 text-center border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400" />
+                                  ? <input type="number" min="0" value={fmt(link.workDays)} onChange={e => updateEmployeeWorkDays(link.employeeId, Number(e.target.value))} className="w-16 px-2 py-1 text-center border border-gray-200 dark:border-gray-600 rounded text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100" />
                                   : <span>{fmt(link.workDays)}</span>}
                               </td>
                               <td className="px-3 py-2 text-center">
@@ -1319,7 +1497,7 @@ export default function TaskCard({
                                         return;
                                       }
                                       updateEmployeeLink(link.employeeId, { duration: v });
-                                    }} className="w-16 px-2 py-1 text-center border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400" />
+                                    }} className="w-16 px-2 py-1 text-center border border-gray-200 dark:border-gray-600 rounded text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100" />
                                   : <span>{link.duration}</span>}
                               </td>
                               {canEditFull && (
@@ -1331,7 +1509,7 @@ export default function TaskCard({
                               )}
                             </tr>
                           ))}
-                          <tr className="bg-gray-50 border-t border-gray-200 font-medium text-gray-700">
+                          <tr className="bg-gray-50 dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700 font-medium text-gray-700">
                             <td className="px-3 py-2">סה"כ</td>
                             <td className="px-3 py-2 text-center">-</td>
                             <td className="px-3 py-2 text-center">{fmt(totals.percentage)}%</td>
@@ -1350,7 +1528,7 @@ export default function TaskCard({
                         <select
                           value={newReceiver ? String(newReceiver.id) : ''}
                           onChange={e => setNewReceiver(availableEmployees.find(emp => emp.id === Number(e.target.value)) || null)}
-                          className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-emerald-400 bg-white"
+                          className="flex-1 px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-emerald-400 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100"
                         >
                           <option value="">בחר עובד להוספה...</option>
                           {availableEmployees
@@ -1358,7 +1536,7 @@ export default function TaskCard({
                             .map(emp => <option key={emp.id} value={String(emp.id)}>{emp.name}</option>)}
                         </select>
                         <button onClick={addReceiver} disabled={!newReceiver}
-                          className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 disabled:bg-gray-200 disabled:text-gray-400 transition-all flex items-center gap-1.5 text-sm font-medium">
+                          className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 disabled:bg-gray-200 dark:disabled:bg-gray-700 disabled:text-gray-400 transition-all flex items-center gap-1.5 text-sm font-medium">
                           <Plus size={14} /> הוסף
                         </button>
                       </div>
@@ -1370,7 +1548,7 @@ export default function TaskCard({
           </div>
 
           {/* ── Footer ── */}
-          <div className="flex-shrink-0 flex gap-2 px-5 py-3 border-t border-gray-200 rounded-b-2xl bg-white">
+          <div className="flex-shrink-0 flex gap-2 px-5 py-3 border-t border-gray-200 dark:border-gray-700 rounded-b-2xl bg-white dark:bg-gray-800">
             {canEditFull &&editedTask.hourReport<=0 && (
               <button onClick={handleDelete}
                 className="px-4 py-2 border border-red-200 text-red-500 rounded-lg hover:bg-red-50 text-sm font-medium transition-all flex items-center gap-1.5">
@@ -1378,10 +1556,10 @@ export default function TaskCard({
               </button>
             )}
             <button onClick={onClose}
-              className="flex-1 px-4 py-2 border border-gray-200 rounded-lg hover:bg-gray-50 text-sm font-medium transition-all">
+              className="flex-1 px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-sm font-medium transition-all">
               ביטול
             </button>
-            <button onClick={handleSave}
+            <button onClick={() => { void handleSave(); }}
               className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-500 text-white py-2 rounded-lg hover:from-emerald-600 hover:to-teal-600 text-sm font-medium transition-all shadow-sm">
               שמירה
             </button>
@@ -1401,6 +1579,17 @@ export default function TaskCard({
           task={chatTask}
           setTask={setChatTask}
           onClose={handleCloseChat}
+        />
+      )}
+      {showAttachModal && (
+        <AttachmentsModal
+          entityType={attachmentEntityType}
+          entityId={editedTask.id}
+          entityName={editedTask.name || editedTask.subject}
+          employees={activeLinks.map(l => ({ id: l.employeeId, name: l.employeeName }))}
+          initialAttachments={taskAttachments}
+          onSave={atts => { void handleSaveAttachments(atts); }}
+          onClose={() => setShowAttachModal(false)}
         />
       )}
     </>

@@ -9,6 +9,7 @@ export interface GeneralSettings {
   minutes: number;
   billRequestSent: boolean;
   closedByStatusChange: boolean;
+  isShowNotification?: boolean;
 }
 
 export interface WorkCapacityEmployee {
@@ -54,6 +55,18 @@ export interface PriorityItem {
   color: string;
   isDefault: boolean;
   isActive: boolean;
+}
+
+export interface DBDetailsResult {
+  profitPercentage: number;
+  hourlyRate: number;
+  subcontractCost: number;
+  monthlyJobScopeHours: number;
+}
+
+export interface StudioDepartmentType {
+  id: number;
+  name: string;
 }
 
 

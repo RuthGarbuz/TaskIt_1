@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Clock, AlertCircle, Eye, MessageSquare, Send, Filter, X, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
 import { useTaskFilters } from '../../hooks/useTaskFilters';
 import { useTaskGrouping } from '../../hooks/useTaskGrouping';
@@ -8,7 +8,7 @@ import ViewModal from '../../components/ViewModal';
 import GanttChart from './GanttChart';
 import HoursReportModal from '../hoursReport/HoursReportModal';
 import type { EmployeeLink, SystemTable, TaskReview, TaskCardSaveOptions, TaskUpdatePatch } from '../../Data/projectsData';
-import { getTaskPriorities, getTaskStatuses, updateStatusAsync, getMyTasks, updateIsClosedAsync, updateTaskAsync } from '../../services/taskService';
+import { getTaskPriorities, getTaskStatuses, updateStatusAsync, getMyTasks, updateIsClosedAsync, updateTaskAsync, findPlanStepRowInTasks, resolveParentStepStatusAsync, dedupeTaskReviews, taskReviewRowKey } from '../../services/taskService';
 import ChatModal from '../tasks/ChatModal';
 import authService from '../../services/authService';
 import type { HoursReport } from '../../Data/HoursReportData';
@@ -17,7 +17,38 @@ import DateFilter from '../shared/DateFilter';
 import SearchableCheckboxFilter from '../shared/SearchableCheckboxFilter';
 import DbFilterModal, { getDefaultDBFilters } from './DbFilterModal';
 import { usePersistedDbFilters } from '../../hooks/usePersistedDbFilters';
+import {
+  usePersistedSessionState,
+  isTaskListViewMode,
+  isGanttTimeframe,
+  isTasksActiveView,
+} from '../../hooks/usePersistedSessionState';
+import HorizontalScrollContainer from '../../components/HorizontalScrollContainer';
+import {
+  TASK_FILTER_POPOVER,
+  TASK_GROUP_CARD,
+  TASK_HEADER_FILTER_BTN_INACTIVE,
+  TASK_HEADER_TH_HOVER,
+  TASK_SUMMARY_PANEL,
+  TASK_TABLE_HEAD,
+  TASK_TABLE_HEAD_CELL,
+  TASK_TABLE_SHELL,
+  TASK_TABLE_STICKY_CELL,
+} from './taskViewTheme';
 import MyTasksReportModal, { type ReportColumn } from './MyTasksReportModal';
+import MessageBox from '../shared/MessageBox';
+import {
+  clearStatusMessageBoxFields,
+  createOpenConfirm,
+  createStepStatusSyncConfirm,
+  type StatusMessageBoxState,
+} from '../shared/statusSyncConfirm';
+import PlanningBillRequestModal from './PlanningBillRequestModal';
+import {
+  COMPLETED_STATUS_ID,
+  EMPLOYEE_STATUS_BLOCKED_WHEN_COMPLETED_MSG,
+  planTableStatusChange,
+} from './taskStatusChangeRules';
 
 interface MyTasksProps {
   tasks: TaskReview[];
@@ -39,7 +70,7 @@ const truncateTo18 = (value?: string) => {
 const MY_TASKS_REPORT_COLUMNS: ReportColumn[] = [
   { key: 'isClosed', label: 'נבדק', widthPx: 60, widthChars: 8, align: 'center' },
   { key: 'subject', label: 'תיאור משימה', widthPx: 220, widthChars: 30 },
-  { key: 'hasChat', label: 'Chat', widthPx: 60, widthChars: 8, align: 'center' },
+  { key: 'hasChat', label: 'צ\'אט', widthPx: 60, widthChars: 8, align: 'center' },
   { key: 'stageName', label: 'שלב', widthPx: 150, widthChars: 22 },
   { key: 'planningSubject', label: 'נושא תכנון', widthPx: 160, widthChars: 24 },
   { key: 'project', label: 'פרויקט', widthPx: 170, widthChars: 24 },
@@ -64,7 +95,7 @@ function SortableTh({ sortKey, label, className, sort, onSort }: {
   sortKey: SortKey; label: string; className: string; sort: SortState; onSort: (k: SortKey) => void;
 }) {
   return (
-    <th className={`${className} cursor-pointer select-none hover:bg-gray-100 transition-colors`} onClick={() => onSort(sortKey)}>
+    <th className={`${className} cursor-pointer select-none ${TASK_HEADER_TH_HOVER} transition-colors`} onClick={() => onSort(sortKey)}>
       <div className="flex items-center gap-1">
         <span>{label}</span>
         <SortIcon active={sort.key === sortKey} dir={sort.key === sortKey ? sort.dir : null} />
@@ -74,18 +105,27 @@ function SortableTh({ sortKey, label, className, sort, onSort }: {
 }
 
 export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksProps) {
-  const [viewMode, setViewMode] = useState<'list' | 'gantt'>('list');
-  const [ganttTimeframe, setGanttTimeframe] = useState<'weekly' | 'monthly'>('weekly');
+  const [viewMode, setViewMode] = usePersistedSessionState('taskit.ui.myTasks.viewMode', 'list', isTaskListViewMode);
+  const [ganttTimeframe, setGanttTimeframe] = usePersistedSessionState('taskit.ui.myTasks.ganttTimeframe', 'weekly', isGanttTimeframe);
   const [ganttTask, setGanttTask] = useState<TaskReview[]>([]);
   const [showViewModal, setShowViewModal] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [dbFilters, setDbFilters] = usePersistedDbFilters('taskit.dbFilters.myTasks', getDefaultDBFilters);
-  const [activeView, setActiveView] = useState<'all' | 'status' | 'urgency' | 'project' | 'date'>('all');
+  const [activeView, setActiveView] = usePersistedSessionState('taskit.ui.myTasks.activeView', 'all', isTasksActiveView);
   const [selectedTask, setSelectedTask] = useState<TaskReview | null>(null);
+  const taskCardStepContext = useMemo(() => {
+    if (!selectedTask || selectedTask.isPlanningSte) {
+      return { planStepListTask: undefined as TaskReview | undefined };
+    }
+    const stepKey = selectedTask.planningStepID;
+    const step = findPlanStepRowInTasks(tasks, stepKey);
+    return { planStepListTask: step };
+  }, [selectedTask, tasks]);
   const [showChatModal, setShowChatModal] = useState(false);
   const [chatTask, setChatTask] = useState<TaskReview | null>(null);
   const [showHoursModal, setShowHoursModal] = useState(false);
   const [hoursTask, setHoursTask] = useState<TaskReview | null>(null);
+  const [billRequestTask, setBillRequestTask] = useState<TaskReview | null>(null);
   const [statuses, setStatuses] = useState<SystemTable[]>([]);
   const [priorities, setPriorities] = useState<SystemTable[]>([]);
   const [openColumnFilter, setOpenColumnFilter] = useState<ColumnFilterKey | null>(null);
@@ -96,6 +136,27 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
     senders: [] as string[], startDateFrom: '', startDateTo: '', endDateFrom: '', endDateTo: '',
   });
   const [showReportModal, setShowReportModal] = useState(false);
+  const [messageBox, setMessageBox] = useState<StatusMessageBoxState>({ isOpen: false, title: '', message: '', type: 'alert' });
+
+  const closeMessageBox = useCallback(() => {
+    setMessageBox(prev => clearStatusMessageBoxFields(prev));
+  }, []);
+
+  const showMessage = (
+    message: string,
+    title = 'הודעה',
+    type: 'alert' | 'success' | 'error' | 'warning' = 'alert',
+  ) => {
+    setMessageBox({ isOpen: true, title, message, type, confirmText: 'אישור' });
+  };
+
+  const openConfirm = useMemo(() => createOpenConfirm(setMessageBox, closeMessageBox), [closeMessageBox]);
+  const openStepStatusSyncConfirm = useMemo(
+    () => createStepStatusSyncConfirm(setMessageBox, closeMessageBox),
+    [closeMessageBox],
+  );
+
+  const [parentStepStatusByStepId, setParentStepStatusByStepId] = useState<Record<number, number>>({});
 
   const [sort, setSort] = useState<SortState>({ key: null, dir: null });
 
@@ -118,6 +179,22 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
 
   const statusOptions = useMemo(() => statuses.map(s => ({ id: s.id, name: s.name })), [statuses]);
   const { searchQuery, setSearchQuery, filteredTasks, activeFiltersCount } = useTaskFilters(tasks, 'myTasks', '');
+
+  const isTaskBlockedByDependency = (task: TaskReview): boolean => {
+
+    // New backend signal: predecessor status for dependency chain.
+    // Any value other than "3" means predecessor is not completed yet.
+     // return task.stepDependStatusID !== 3||task.taskDependStatusID !== 3 &&( !task.stepDependStatusID &&!task.taskDependStatusID) ;
+     if ( (task.stepDependStatusID === 3 || !task.stepDependStatusID)
+&&   (task.taskDependStatusID === 3 || !task.taskDependStatusID)){
+  return false;
+}else{
+  return true;
+}
+
+    }
+
+  
 
   const toggleArrayFilter = <T,>(items: T[], value: T) =>
     items.includes(value) ? items.filter(i => i !== value) : [...items, value];
@@ -168,8 +245,10 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
     { value: 'closed', label: 'סגור' },
   ], []);
 
+  const listTasks = useMemo(() => dedupeTaskReviews(filteredTasks), [filteredTasks]);
+
   const columnFilteredTasks = useMemo(() =>
-    filteredTasks.filter(task => {
+    listTasks.filter(task => {
       const closedState = task.isClosed ? 'closed' : 'open';
       return (
         (columnFilters.closedStates.length === 0 || columnFilters.closedStates.includes(closedState)) &&
@@ -180,7 +259,7 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
         matchesDateRange(task.startDate, columnFilters.startDateFrom, columnFilters.startDateTo) &&
         matchesDateRange(task.endDate, columnFilters.endDateFrom, columnFilters.endDateTo)
       );
-    }), [filteredTasks, columnFilters]);
+    }), [listTasks, columnFilters]);
 
   const sortTasks = (taskList: TaskReview[]) => {
     if (!sort.key || !sort.dir) return taskList;
@@ -295,7 +374,7 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
     sortKey?: SortKey; children: React.ReactNode;
   }) => (
     <th
-      className={`${headerClassName} relative ${sortKey ? 'cursor-pointer hover:bg-gray-100' : ''}`}
+      className={`${headerClassName} relative ${sortKey ? `cursor-pointer ${TASK_HEADER_TH_HOVER}` : ''}`}
       onClick={sortKey ? () => handleSort(sortKey) : undefined}
     >
       <div className={`flex items-center gap-1 ${align === 'center' ? 'justify-center' : 'justify-between'}`}>
@@ -308,8 +387,8 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
           onClick={e => { e.stopPropagation(); setOpenColumnFilter(current => current === filterKey ? null : filterKey); }}
           className={`p-1 rounded-md border transition-colors ${
             isColumnFilterActive(filterKey)
-              ? 'bg-emerald-100 text-emerald-700 border-emerald-300'
-              : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-100'
+              ? 'bright-surface bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-900/40 dark:text-emerald-300 dark:border-emerald-700'
+              : TASK_HEADER_FILTER_BTN_INACTIVE
           }`}
           title={`סינון ${label}`}
         >
@@ -318,13 +397,13 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
       </div>
       {openColumnFilter === filterKey && (
         <div
-          className={`absolute mt-2 z-[9999] ${contentClassName} rounded-xl border border-gray-200 bg-white shadow-xl p-3`}
+          className={`absolute mt-2 z-[9999] ${TASK_FILTER_POPOVER} ${contentClassName}`}
           style={{ top: '100%' }}
           onClick={e => e.stopPropagation()}
         >
           <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-semibold text-gray-800">סינון {label}</span>
-            <button type="button" onClick={() => setOpenColumnFilter(null)} className="p-1 rounded-md text-gray-500 hover:bg-gray-100">
+            <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">סינון {label}</span>
+            <button type="button" onClick={() => setOpenColumnFilter(null)} className="p-1 rounded-md text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700">
               <X size={14} />
             </button>
           </div>
@@ -365,6 +444,11 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
     } catch (error) { console.error('Error loading gantt tasks:', error); if (isMounted) setGanttTask([]); }
   };
 
+  const reloadPageTasks = async () => {
+    await loadTasks(true, dbFilters);
+    if (viewMode === 'gantt') await loadGanttTasks(true, dbFilters);
+  };
+
   useEffect(() => {
     let isMounted = true;
     const loadStatuses = async () => {
@@ -378,7 +462,7 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
     loadTasks(isMounted, dbFilters);
     loadStatuses();
     loadPriorities();
-    const intervalId = window.setInterval(() => loadTasks(true, dbFilters), 30000);
+    const intervalId = window.setInterval(() => loadTasks(true, dbFilters), 60000);
     return () => { isMounted = false; window.clearInterval(intervalId); };
   }, [onTasksUpdate, dbFilters]);
 
@@ -386,17 +470,78 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
     let isMounted = true;
     if (viewMode !== 'gantt') return () => { isMounted = false; };
     loadGanttTasks(isMounted, dbFilters);
-    const intervalId = window.setInterval(() => loadGanttTasks(true, dbFilters), 30000);
+    const intervalId = window.setInterval(() => loadGanttTasks(true, dbFilters), 60000);
     return () => { isMounted = false; window.clearInterval(intervalId); };
   }, [viewMode, dbFilters]);
 
-  const handleTaskStatusChange = async (taskId: number, statusId: number) => {
-    const nextStatusName = statusOptions.find(s => s.id === statusId)?.name ?? '';
-    const isTask = tasks.find(t => t.id === taskId)?.isPlanningSte ?? false;
-    await updateStatusAsync(taskId, statusId, !isTask, false);
-    onTasksUpdate(tasks.map(task => task.id === taskId
-      ? { ...task, statuID: statusId, statusName: nextStatusName || task.statusName, isClosed: statusKeyFromName(nextStatusName || task.statusName) === 'done' }
-      : task));
+  useEffect(() => {
+    let cancelled = false;
+    const loadParentStepStatuses = async () => {
+      const stepIds = [...new Set(
+        tasks.filter(t => !t.isPlanningSte && t.planningStepID > 0).map(t => t.planningStepID),
+      )];
+      if (stepIds.length === 0) {
+        if (!cancelled) setParentStepStatusByStepId({});
+        return;
+      }
+      const next: Record<number, number> = {};
+      await Promise.all(stepIds.map(async stepId => {
+        const sampleTask = tasks.find(t => !t.isPlanningSte && t.planningStepID === stepId);
+        if (!sampleTask) return;
+        const stepRow = findPlanStepRowInTasks(tasks, stepId);
+        if (stepRow?.statuID != null && stepRow.statuID > 0) {
+          next[stepId] = stepRow.statuID;
+          return;
+        }
+        try {
+          const statusId = await resolveParentStepStatusAsync(sampleTask, {
+            planStepListTask: stepRow ?? null,
+            contextTasks: tasks,
+          });
+          if (statusId != null && statusId > 0) next[stepId] = statusId;
+        } catch {
+          /* keep without entry */
+        }
+      }));
+      if (!cancelled) setParentStepStatusByStepId(next);
+    };
+    void loadParentStepStatuses();
+    return () => { cancelled = true; };
+  }, [tasks]);
+
+  const handleTaskStatusChange = async (task: TaskReview, statusId: number) => {
+    if (statusId === (task.statuID ?? 0)) return;
+
+    if (isTaskBlockedByDependency(task)) {
+      showMessage('המשימה תלויה במשימה/שלב קודם שטרם הושלם', 'אזהרה', 'warning');
+      return;
+    }
+
+    const parentStepCompleted =
+      !task.isPlanningSte && parentStepStatusByStepId[task.planningStepID] === COMPLETED_STATUS_ID;
+    if (parentStepCompleted || task.statuID === COMPLETED_STATUS_ID) {
+      showMessage(EMPLOYEE_STATUS_BLOCKED_WHEN_COMPLETED_MSG, 'אזהרה', 'warning');
+      return;
+    }
+
+    const nextStatusName = statusOptions.find(s => s.id === statusId)?.name ?? task.statusName;
+    const plan = await planTableStatusChange(
+      task,
+      statusId,
+      nextStatusName,
+      tasks,
+      'myTasks',
+      openConfirm,
+      openStepStatusSyncConfirm,
+      (message) => showMessage(message, 'אזהרה', 'warning'),
+    );
+    if (!plan.proceed) return;
+
+    const isTask = !task.isPlanningSte;
+    await updateStatusAsync(task.id, statusId, isTask, false);
+    onTasksUpdate(tasks.map(t => t.id === task.id
+      ? { ...t, statuID: statusId, statusName: nextStatusName || t.statusName, isClosed: statusKeyFromName(nextStatusName || t.statusName) === 'done' }
+      : t));
   };
 
   const buildChanges = (editedTask: TaskReview): TaskUpdatePatch => ({
@@ -423,11 +568,11 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
     const pdc = options?.taskParentDateCascade;
     const currentTask = tasks.find(t => t.id === updatedTask.id);
     const isTask = currentTask?.isPlanningSte ?? false;
-    if (currentTask && currentTask.statuID !== updatedTask.statuID) {
-      const nextStatusName = statusOptions.find(s => s.id === (updatedTask.statuID ?? 0))?.name ?? updatedTask.statusName ?? '';
-      await updateStatusAsync(updatedTask.id, updatedTask.statuID ?? 0, !isTask, false);
-      updatedTask = { ...updatedTask, statusName: nextStatusName, isClosed: statusKeyFromName(nextStatusName) === 'done' };
-    }
+    // if (currentTask && currentTask.statuID !== updatedTask.statuID) {
+    //   const nextStatusName = statusOptions.find(s => s.id === (updatedTask.statuID ?? 0))?.name ?? updatedTask.statusName ?? '';
+    //   await updateStatusAsync(updatedTask.id, updatedTask.statuID ?? 0, !isTask, false);
+    //   updatedTask = { ...updatedTask, statusName: nextStatusName, isClosed: statusKeyFromName(nextStatusName) === 'done' };
+    // }
     if (currentTask && currentTask.isClosed !== updatedTask.isClosed)
       await updateIsClosedAsync(updatedTask.id, updatedTask.isClosed ?? false, !isTask);
 
@@ -441,7 +586,8 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
         await updateTaskAsync(
           patch,
           isCurrent ? employeeLinks : [],
-          true
+          true,
+          false
         );
       }
 
@@ -450,7 +596,8 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
         await updateTaskAsync(
           { id: o.id, startDate: o.startDate, endDate: o.endDate, duration: o.duration },
           [],
-          true
+          true,
+          false
         );
       }
 
@@ -466,7 +613,7 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
         if (pdcForStep.workDays != null) stepPatch.workDays = pdcForStep.workDays;
       }
       if (Object.keys(stepPatch).length > 1) {
-        await updateTaskAsync(stepPatch, [], false);
+        await updateTaskAsync(stepPatch, [], false,false);
       }
 
       onTasksUpdate(
@@ -490,6 +637,7 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
         })
       );
       onTaskUpdate(updatedTask);
+      await reloadPageTasks();
       return;
     }
 
@@ -497,14 +645,14 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
       const changes = buildChanges(updatedTask);
       const hasT = Object.keys(changes).length > 1;
       if (hasT || !employeeLinks.every(l => !l.isModified && !l.isNew && !l.isDeleted)) {
-        await updateTaskAsync(changes, employeeLinks, true);
+        await updateTaskAsync(changes, employeeLinks, true,false);
       }
 
       for (const o of pdc.otherTaskDateUpdates ?? []) {
         await updateTaskAsync(
           { id: o.id, startDate: o.startDate, endDate: o.endDate, duration: o.duration },
           [],
-          true
+          true,false
         );
       }
 
@@ -519,7 +667,7 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
             ...(pdc.workDays != null ? { workDays: pdc.workDays } : {})
           },
           [],
-          false
+          false,false
         );
       }
 
@@ -542,6 +690,7 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
         })
       );
       onTaskUpdate(updatedTask);
+      await reloadPageTasks();
       return;
     }
 
@@ -552,19 +701,40 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
       employeeLinks.every(l => !l.isModified && !l.isNew && !l.isDeleted) &&
       !options?.cascadeStage &&
       !options?.taskStepHoursCascade &&
-      !options?.taskParentDateCascade
+      !options?.taskParentDateCascade &&
+      !options?.statusCascade
     ) {
       return;
     }
 
-    await updateTaskAsync(changes, employeeLinks, !isTask);
+    await updateTaskAsync(changes, employeeLinks, !isTask,false);
+
+    if (options?.statusCascade) {
+      const sc = options.statusCascade;
+      for (const child of sc.childTaskUpdates) {
+        await updateStatusAsync(child.id, child.statuID, true, false, sc.syncChildEmployees);
+      }
+      onTasksUpdate(
+        tasks.map(t => {
+          if (t.id === updatedTask.id) return { ...updatedTask };
+          const cu = sc.childTaskUpdates.find(c => c.id === t.id);
+          if (cu) {
+            return { ...t, statuID: cu.statuID, statusName: cu.statusName, isClosed: statusKeyFromName(cu.statusName) === 'done' };
+          }
+          return t;
+        })
+      );
+      onTaskUpdate(updatedTask);
+      await reloadPageTasks();
+      return;
+    }
 
     if (options?.cascadeStage) {
       const c = options.cascadeStage;
       await updateTaskAsync(
         { id: c.id, startDate: c.startDate, endDate: c.endDate },
         [],
-        false
+        false,false
       );
       onTasksUpdate(
         tasks.map(t => {
@@ -575,6 +745,7 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
       );
     }
     onTaskUpdate(updatedTask);
+    await reloadPageTasks();
   };
 
   const getUrgencyColorByKey = (urgencyId: number) => {
@@ -616,7 +787,7 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
             {Object.entries(groupedTasks).map(([groupName, groupTasks]) => {
               const sorted = sortTasks(groupTasks);
               return (
-                <div key={groupName} className="bg-white rounded-xl shadow-sm border border-gray-200">
+                <div key={groupName} className={TASK_GROUP_CARD}>
                   {activeView !== 'all' && (
                     <div className={`px-6 py-3 flex items-center justify-between ${
                       activeView === 'urgency' ? 'bg-gradient-to-r from-amber-400 to-orange-400' :
@@ -632,19 +803,18 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
                     </div>
                   )}
 
-                  <div
-                    style={{
-                      overflowX: openColumnFilter ? 'visible' : 'auto',
-                      overflowY: openColumnFilter ? 'visible' : 'visible',
-                      WebkitOverflowScrolling: 'touch',
+                  <HorizontalScrollContainer
+                    contentClassName={TASK_TABLE_SHELL}
+                    contentStyle={{
+                      overflowX: openColumnFilter ? 'visible' : undefined,
+                      overflowY: openColumnFilter ? 'visible' : undefined,
                     }}
-                    className="sticky bottom-0"
                   >
                     <table style={{ minWidth: '1800px', width: '100%' }}>
-                      <thead className="bg-gray-50 border-b border-gray-200">
+                      <thead className={TASK_TABLE_HEAD}>
                         <tr>
                           {/* Eye sticky */}
-                          <th className="px-2 py-2 w-10 sticky right-0 z-20 bg-gray-50 border-l border-gray-200" />
+                          <th className={`px-2 py-2 w-10 sticky right-0 z-20 ${TASK_TABLE_HEAD_CELL}`} />
 
                           {/* נבדק */}
                           {renderHeaderFilter({
@@ -667,7 +837,7 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
                           })}
 
                           <SortableTh sortKey="subject" label="תיאור המשימה" className="px-3 py-2 text-right text-xs font-semibold text-gray-700 min-w-[200px]" sort={sort} onSort={handleSort} />
-                          <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-16">Chat</th>
+                          <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-16">צ'אט</th>
                           <SortableTh sortKey="name" label="שלב" className="px-3 py-2 text-right text-xs font-semibold text-gray-700 w-32" sort={sort} onSort={handleSort} />
                           <SortableTh sortKey="planningSubjectName" label="נושא תכנון" className="px-3 py-2 text-right text-xs font-semibold text-gray-700 w-36" sort={sort} onSort={handleSort} />
 
@@ -688,7 +858,7 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
                           })}
 
                           {renderHeaderFilter({
-                            filterKey: 'status', label: 'סטטוס משימה לעובד',
+                            filterKey: 'status', label: 'סטטוס עובד למשימה',
                             headerClassName: 'px-3 py-2 text-right text-xs font-semibold text-gray-700 w-20 whitespace-nowrap',
                             sortKey: 'statusName',
                             children: (
@@ -704,7 +874,7 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
                           })}
 
                           {renderHeaderFilter({
-                            filterKey: 'urgency', label: 'עדיפות לעובד',
+                            filterKey: 'urgency', label: 'עדיפות',
                             headerClassName: 'px-3 py-2 text-right text-xs font-semibold text-gray-700 w-32',
                             sortKey: 'urgencyName',
                             children: (
@@ -765,17 +935,21 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
 
                           <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-28">תלוי משימה</th>
                           <SortableTh sortKey="workHours" label="תקצוב שעות למשימה" className="px-3 py-2 text-right text-xs font-semibold text-emerald-700 w-32" sort={sort} onSort={handleSort} />
-                          <SortableTh sortKey="utilizationPercentage" label="ניצול שעות במשימה" className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-28" sort={sort} onSort={handleSort} />
+                          <SortableTh sortKey="utilizationPercentage" label="אחוז ניצול במשימה" className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-28" sort={sort} onSort={handleSort} />
                           <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-28">דיווח שעות</th>
                           <th className="px-3 py-2 text-center text-xs font-semibold text-emerald-700 w-20">אינדקציה לחשבון</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-gray-200">
-                        {sorted.map(task => (
-                          <tr key={task.id} className="hover:bg-emerald-50 transition-colors relative group">
+                      <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                        {sorted.map((task, index) => (
+                          (() => {
+                            const dependencyBlocked = isTaskBlockedByDependency(task);
+                            const dependencyBlockTitle = 'המשימה תלויה במשימה/שלב קודם שטרם הושלם';
+                            return (
+                          <tr key={taskReviewRowKey(task, index)} className="hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors relative group">
 
                             {/* Eye sticky */}
-                            <td className="px-2 py-2 sticky right-0 z-10 bg-white group-hover:bg-emerald-50 border-l border-gray-200">
+                            <td className={`px-2 py-2 sticky right-0 z-10 ${TASK_TABLE_STICKY_CELL}`}>
                               <button
                                 onClick={() => setSelectedTask(task)}
                                 className="p-1 rounded-lg bg-emerald-500 text-white hover:bg-emerald-600 transition-all opacity-0 group-hover:opacity-100"
@@ -877,8 +1051,12 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
             style={getStatusColorByKey(task.statuID ?? 0)}
           />
           <select
+            key={`status-${taskReviewRowKey(task)}-${task.statuID}`}
             value={selectedStatusId}
-            onChange={e => handleTaskStatusChange(task.id, Number(e.target.value))}
+            onChange={e => {
+              const id = Number(e.target.value);
+              void handleTaskStatusChange(task, id);
+            }}
             disabled={task.isClosed && task.senderID !== userId}
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
             title={selectedStatusName}
@@ -997,9 +1175,10 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
                             {/* דיווח שעות */}
                             <td className="px-3 py-2 text-center" onClick={e => e.stopPropagation()}>
                               <button
-                                onClick={e => { e.stopPropagation(); setHoursTask(task); setShowHoursModal(true); }}
-                                className="px-2 py-1 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-all flex items-center gap-1 text-xs font-bold mx-auto"
-                                title="דיווח שעות לשלב/משימה"
+                                onClick={e => { e.stopPropagation(); if (dependencyBlocked) return; setHoursTask(task); setShowHoursModal(true); }}
+                                disabled={dependencyBlocked}
+                                className="px-2 py-1 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-all flex items-center gap-1 text-xs font-bold mx-auto disabled:opacity-50 disabled:cursor-not-allowed"
+                                title={dependencyBlocked ? dependencyBlockTitle : 'דיווח שעות לשלב/משימה'}
                               >
                                 <Clock size={12} />
                                 <span className="hidden lg:inline">דיווח</span>
@@ -1009,16 +1188,26 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
                             {/* חשבון */}
                             <td className="px-3 py-2 text-center" onClick={e => e.stopPropagation()}>
                               <button
-                                onClick={e => { e.stopPropagation(); alert(`שליחת בקשה להגשת חשבון עבור: ${task.subject}`); }}
-                                className="px-2 py-1 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-all flex items-center gap-1 text-xs font-bold mx-auto"
-                                title="שלח בקשה להגשת חשבון"
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  if (dependencyBlocked) return;
+                                  setBillRequestTask({ ...task, hasBill: true });
+                                }}
+                                disabled={dependencyBlocked}
+                                className="relative px-2 py-1 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-all flex items-center gap-1 text-xs font-bold mx-auto disabled:opacity-50 disabled:cursor-not-allowed"
+                                title={dependencyBlocked ? dependencyBlockTitle : task.hasBill ? 'קיימת בקשת חשבון' : 'שלח בקשה להגשת חשבון'}
                               >
                                 <Send size={12} />
                                 <span className="hidden lg:inline">חשבון</span>
+                                {(task.hasBill || (billRequestTask && billRequestTask.id === task.id && billRequestTask.hasBill)) && (
+                                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-white" />
+                                )}
                               </button>
                             </td>
 
                           </tr>
+                            );
+                          })()
                         ))}
 
                         {sorted.length === 0 && (
@@ -1030,7 +1219,7 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
                         )}
                       </tbody>
                     </table>
-                  </div>
+                  </HorizontalScrollContainer>
                 </div>
               );
             })}
@@ -1044,7 +1233,7 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
   const actualHours = columnFilteredTasks.reduce((s, t) => s + (t.hourReport ?? 0), 0);
 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl p-4 mt-2 mb-2">
+    <div className={TASK_SUMMARY_PANEL}>
       <div className="grid grid-cols-5 gap-4 text-center">
         <div>
           <div className="text-2xl font-bold text-blue-600">{totalTasks}</div>
@@ -1083,11 +1272,11 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
             <ul className="space-y-2">
               <li className="flex items-start gap-2 text-sm text-amber-800">
                 <span className="text-amber-500 mt-0.5">•</span>
-                <span>רשימת המשימות שלי יופיעו רק משימות שהם משוייכות אלי</span>
+                <span><span className="font-bold">סינון משימות אישי:</span> בורד "המשימות שלי" יציג אך ורק משימות המשויכות למשתמש המחובר.</span>
               </li>
               <li className="flex items-start gap-2 text-sm text-amber-800">
                 <span className="text-amber-500 mt-0.5">•</span>
-                <span>אפשר לשנות תצוגה לרשימה, לקבץ לפי קטגוריה, עדיפות ועוד</span>
+                <span><span className="font-bold">ניהול תצוגה וחיתוכים:</span> ניתן לשנות את תצוגת הבורד לרשימה/גאנט, וכן לקבץ ולסנן את המשימות לפי קטגוריה, רמת עדיפות או חתכים נוספים.</span>
               </li>
             </ul>
           </div>
@@ -1096,7 +1285,10 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
         <GanttChart
           tasks={ganttTask} timeframe={ganttTimeframe} currentView="myTasks"
           statuses={statuses} priorities={priorities}
-          onUpdate={(updatedTask, employeeLinks, options) => { void handleTaskUpdateFromCard(updatedTask, employeeLinks, options); setSelectedTask(null); }}
+          onUpdate={async (updatedTask, employeeLinks, options) => {
+            await handleTaskUpdateFromCard(updatedTask, employeeLinks, options);
+            setSelectedTask(null);
+          }}
           viewMode={'myTasks'}
         />
       )}
@@ -1133,10 +1325,15 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
         <TaskCard
           task={selectedTask}
           onClose={() => setSelectedTask(null)}
-          onUpdate={(updatedTask, employeeLinks, options) => { void handleTaskUpdateFromCard(updatedTask, employeeLinks, options); setSelectedTask(null); }}
+          onUpdate={async (updatedTask, employeeLinks, options) => {
+            await handleTaskUpdateFromCard(updatedTask, employeeLinks, options);
+            setSelectedTask(null);
+          }}
           viewMode="myTasks"
           statuses={statuses}
           priorities={priorities}
+          planStepListTask={taskCardStepContext.planStepListTask}
+          contextTasks={tasks}
         />
       )}
 
@@ -1158,6 +1355,37 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
           }}
         />
       )}
+
+      {billRequestTask && (
+        <PlanningBillRequestModal
+          task={billRequestTask}
+          onClose={() => setBillRequestTask(null)}
+          onSuccess={() => {
+            if (billRequestTask) {
+              const updated = { ...billRequestTask, hasBill: true };
+              onTasksUpdate(tasks.map(t => t.id === billRequestTask.id ? { ...t, hasBill: true } : t));
+              onTaskUpdate(updated);
+            }
+            showMessage('בקשה להגשת חשבון נפתחה בהצלחה', 'הגשת חשבון', 'success');
+          }}
+          onError={message => showMessage(message, 'שגיאה', 'error')}
+        />
+      )}
+
+      <MessageBox
+        isOpen={messageBox.isOpen}
+        onClose={closeMessageBox}
+        title={messageBox.title}
+        message={messageBox.message}
+        type={messageBox.type}
+        confirmText={messageBox.confirmText ?? 'אישור'}
+        cancelText={messageBox.cancelText ?? 'לא'}
+        showCancel={messageBox.showCancel}
+        checkboxLabel={messageBox.checkboxLabel}
+        checkboxDefaultChecked={messageBox.checkboxDefaultChecked}
+        onConfirm={messageBox.onConfirm}
+        onCancel={messageBox.onCancel}
+      />
     </>
   );
 }

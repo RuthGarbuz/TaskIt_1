@@ -1,4 +1,4 @@
-import { Search } from 'lucide-react';
+import SearchInput from './SearchInput';
 
 type FilterOption<T extends string | number> = {
   value: T;
@@ -35,22 +35,19 @@ export default function SearchableCheckboxFilter<T extends string | number>({
 
   return (
     <div className="space-y-3">
-      <div className="relative">
-        <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-        <input
-          type="text"
-          value={searchValue}
-          onChange={(e) => onSearchChange(e.target.value)}
-          placeholder={searchPlaceholder}
-          className="w-full pr-9 pl-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-400"
-        />
-      </div>
+      <SearchInput
+        value={searchValue}
+        onChange={onSearchChange}
+        placeholder={searchPlaceholder}
+        iconSize={14}
+        className="text-sm focus:ring-emerald-400"
+      />
 
       <div className="max-h-56 overflow-y-auto space-y-1">
         {filteredOptions.map((option) => (
           <label
             key={`${String(option.value)}-${option.label}`}
-            className="flex items-center gap-2 p-2 rounded-lg hover:bg-gray-50 cursor-pointer text-sm text-gray-700"
+            className="flex items-center gap-2 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer text-sm text-gray-700"
           >
             <input
               type="checkbox"
@@ -70,7 +67,7 @@ export default function SearchableCheckboxFilter<T extends string | number>({
       <button
         type="button"
         onClick={onClear}
-        className="w-full py-2 text-sm font-semibold border border-gray-300 rounded-lg hover:bg-gray-50"
+        className="w-full py-2 text-sm font-semibold border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
       >
         {clearLabel}
       </button>

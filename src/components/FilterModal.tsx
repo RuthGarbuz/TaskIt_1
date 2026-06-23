@@ -3,6 +3,8 @@ import { X, Calendar } from 'lucide-react';
 import type { Task } from '../types/index';
 import type { TaskReview } from '../Data/projectsData';
 import { getStatusText } from '../Data/tasksData';
+import { DateInput } from '../pages/shared/DateInput';
+import SearchInput from '../pages/shared/SearchInput';
 
 interface Filters {
   status: string[];
@@ -61,13 +63,11 @@ export default function FilterModal({
   });
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col" style={{ maxHeight: '85vh' }}>
-
-        {/* Header — fixed */}
-        <div className="flex-shrink-0 border-b px-6 py-4 flex items-center justify-between rounded-t-2xl">
-          <h2 className="text-xl font-bold">סינון משימות</h2>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="modal-shell dark-surface bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-2xl flex flex-col" style={{ maxHeight: '85vh' }}>
+        <div className="flex-shrink-0 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex items-center justify-between rounded-t-2xl">
+          <h2 className="text-xl font-bold text-gray-800 dark:text-white">סינון משימות</h2>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-500 dark:text-gray-400">
             <X size={20} />
           </button>
         </div>
@@ -114,12 +114,12 @@ export default function FilterModal({
           {/* Sender filter */}
           <div className="mb-6 pb-6 border-b">
             <h3 className="font-semibold mb-3 text-gray-800">שולח</h3>
-            <input
-              type="text"
+            <SearchInput
               value={senderSearchQuery}
-              onChange={(e) => setSenderSearchQuery(e.target.value)}
+              onChange={setSenderSearchQuery}
               placeholder="חפש שולח..."
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-sm mb-3"
+              showSearchIcon={false}
+              className="text-sm mb-3 px-3"
             />
             <div className="max-h-32 overflow-y-auto space-y-2 pr-1">
               {filteredSenders.length > 0 ? (
@@ -186,12 +186,12 @@ export default function FilterModal({
                 </button>
               ))}
             </div>
-            <input
-              type="text"
+            <SearchInput
               value={projectSearchQuery}
-              onChange={(e) => setProjectSearchQuery(e.target.value)}
+              onChange={setProjectSearchQuery}
               placeholder="חפש פרויקט..."
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-sm mb-3"
+              showSearchIcon={false}
+              className="text-sm mb-3 px-3"
             />
             <div className="max-h-40 overflow-y-auto space-y-2 pr-1">
               {filteredProjects.length > 0 ? (
@@ -221,19 +221,17 @@ export default function FilterModal({
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm text-gray-600 mb-1">מתאריך</label>
-                <input
-                  type="date"
+                <DateInput
                   value={filters.dateFrom}
-                  onChange={(e) => onFiltersChange({ ...filters, dateFrom: e.target.value })}
+                  onChange={v => onFiltersChange({ ...filters, dateFrom: v })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-sm"
                 />
               </div>
               <div>
                 <label className="block text-sm text-gray-600 mb-1">עד תאריך</label>
-                <input
-                  type="date"
+                <DateInput
                   value={filters.dateTo}
-                  onChange={(e) => onFiltersChange({ ...filters, dateTo: e.target.value })}
+                  onChange={v => onFiltersChange({ ...filters, dateTo: v })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-sm"
                 />
               </div>

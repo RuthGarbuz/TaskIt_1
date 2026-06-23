@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react';
-import { X, Database, RefreshCw, RotateCcw, Search } from 'lucide-react';
+import { X, Database, RefreshCw, RotateCcw } from 'lucide-react';
 import type { ProjectBasic } from '../../Data/projectInfoData';
 import * as projectInfoService from '../../services/projectInfoService';
 import type { EmployeeBasic } from '../../services/templatesSettingServices';
 import { getEmployees } from '../../services/templatesSettingServices';
+import { DateInput } from '../shared/DateInput';
+import SearchInput from '../shared/SearchInput';
+import { MODAL_CLOSE_BTN, MODAL_FIELD, MODAL_FOOTER, MODAL_HEADER_SM, MODAL_LABEL, MODAL_TITLE_SM, TASK_CTRL_BTN } from '../tasks/taskViewTheme';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -190,19 +193,19 @@ export default function HoursReportDBFilter({
       onClick={onClose}
     >
       <div
-        className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-2xl flex flex-col max-h-[90vh]"
+        className="modal-shell dark-surface bg-white dark:bg-gray-800 w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-2xl border border-gray-200 dark:border-gray-700 flex flex-col max-h-[90vh]"
         dir="rtl"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
+        <div className={MODAL_HEADER_SM}>
           <div className="flex items-center gap-2">
-            <Database size={16} className="text-teal-600" />
-            <h2 className="font-bold text-gray-900 text-base">טעינת נתונים</h2>
+            <Database size={16} className="text-teal-600 dark:text-teal-400" />
+            <h2 className={MODAL_TITLE_SM}>טעינת נתונים</h2>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors text-gray-500"
+            className={MODAL_CLOSE_BTN}
           >
             <X size={16} />
           </button>
@@ -221,33 +224,31 @@ export default function HoursReportDBFilter({
 
           {/* Date range */}
           <div>
-            <p className="text-xs font-semibold text-gray-600 mb-3">טווח תאריכים</p>
+            <p className={`${MODAL_LABEL} mb-3`}>טווח תאריכים</p>
             <div className="flex gap-3">
               <div className="flex-1">
-                <label className="text-[10px] text-gray-400 block mb-1.5">מתאריך</label>
-                <input
-                  type="date"
+                <label className="text-[10px] text-gray-400 dark:text-gray-500 block mb-1.5">מתאריך</label>
+                <DateInput
                   value={draft.dateFrom}
-                  onChange={e => setDraft(d => ({ ...d, dateFrom: e.target.value }))}
-                  className="w-full text-xs px-3 py-2 border-2 border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent"
+                  onChange={v => setDraft(d => ({ ...d, dateFrom: v }))}
+                  className={MODAL_FIELD}
                 />
               </div>
               <div className="flex-1">
-                <label className="text-[10px] text-gray-400 block mb-1.5">עד תאריך</label>
-                <input
-                  type="date"
+                <label className="text-[10px] text-gray-400 dark:text-gray-500 block mb-1.5">עד תאריך</label>
+                <DateInput
                   value={draft.dateTo}
-                  onChange={e => setDraft(d => ({ ...d, dateTo: e.target.value }))}
-                  className="w-full text-xs px-3 py-2 border-2 border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent"
+                  onChange={v => setDraft(d => ({ ...d, dateTo: v }))}
+                  className={MODAL_FIELD}
                 />
               </div>
             </div>
 
             {/* Range indicator */}
             {(draft.dateFrom || draft.dateTo) && (
-              <div className="mt-2 bg-teal-50 border border-teal-200 rounded-lg px-3 py-2">
-                <p className="text-[10px] text-teal-600 font-medium mb-0.5">טווח נבחר:</p>
-                <p className="text-xs text-teal-800">
+              <div className="mt-2 bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800 rounded-lg px-3 py-2">
+                <p className="text-[10px] text-teal-600 dark:text-teal-300 font-medium mb-0.5">טווח נבחר:</p>
+                <p className="text-xs text-teal-800 dark:text-teal-200">
                   {draft.dateFrom || 'ללא הגבלה'} — {draft.dateTo || 'ללא הגבלה'}
                 </p>
               </div>
@@ -255,9 +256,9 @@ export default function HoursReportDBFilter({
           </div>
 
           {/* Projects */}
-          <div className="border-t border-gray-100 pt-4">
+          <div className="border-t border-gray-100 dark:border-gray-700 pt-4">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-gray-600">פרויקט</p>
+              <p className={MODAL_LABEL}>פרויקט</p>
               {draft.projects.length > 0 && (
                 <button
                   onClick={() => setDraft(d => ({ ...d, projects: [] }))}
@@ -269,25 +270,14 @@ export default function HoursReportDBFilter({
             </div>
 
             {/* Search */}
-            <div className="relative mb-2">
-              <Search size={13} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                value={projectSearch}
-                onChange={e => setProjectSearch(e.target.value)}
-                placeholder="חפש פרויקט..."
-                dir="rtl"
-                className="w-full text-xs pr-8 pl-3 py-2 border border-gray-200 rounded-lg bg-gray-50 focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent"
-              />
-              {projectSearch && (
-                <button
-                  onClick={() => setProjectSearch('')}
-                  className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                >
-                  <X size={12} />
-                </button>
-              )}
-            </div>
+            <SearchInput
+              value={projectSearch}
+              onChange={setProjectSearch}
+              placeholder="חפש פרויקט..."
+              iconSize={13}
+              dir="rtl"
+              className="text-xs mb-2 border-gray-200 bg-gray-50 focus:ring-teal-400 py-2"
+            />
 
             {/* Options */}
             <div className="max-h-44 overflow-y-auto flex flex-col gap-0.5">
@@ -301,11 +291,11 @@ export default function HoursReportDBFilter({
                       key={p.id}
                       onClick={() => toggleProject(p.id)}
                       className={`flex items-center gap-2.5 px-2 py-2 rounded-lg cursor-pointer transition-colors ${
-                        checked ? 'bg-teal-50' : 'hover:bg-gray-50'
+                        checked ? 'bg-teal-50 dark:bg-teal-950/40' : 'hover:bg-gray-50 dark:hover:bg-gray-700'
                       }`}
                     >
                       <div className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 border transition-all ${
-                        checked ? 'bg-teal-500 border-teal-500' : 'border-gray-300 bg-white'
+                        checked ? 'bg-teal-500 border-teal-500' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'
                       }`}>
                         {checked && (
                           <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5">
@@ -313,7 +303,7 @@ export default function HoursReportDBFilter({
                           </svg>
                         )}
                       </div>
-                      <span className={`text-xs ${checked ? 'text-teal-800 font-medium' : 'text-gray-700'}`}>
+                      <span className={`text-xs ${checked ? 'text-teal-800 dark:text-teal-200 font-medium' : 'text-gray-700 dark:text-gray-200'}`}>
                         {p.name}
                       </span>
                     </label>
@@ -328,7 +318,7 @@ export default function HoursReportDBFilter({
                 {draft.projects.map(id => (
                   <span
                     key={id}
-                    className="inline-flex items-center gap-1 bg-teal-100 text-teal-800 text-xs px-2 py-0.5 rounded-full border border-teal-200"
+                    className="inline-flex items-center gap-1 bg-teal-100 dark:bg-teal-900/50 text-teal-800 dark:text-teal-200 text-xs px-2 py-0.5 rounded-full border border-teal-200 dark:border-teal-700"
                   >
                     {projectNameById(id)}
                     <button type="button" onClick={() => toggleProject(id)} className="hover:text-teal-600">
@@ -341,9 +331,9 @@ export default function HoursReportDBFilter({
           </div>
 
           {/* Employees */}
-          <div className="border-t border-gray-100 pt-4">
+          <div className="border-t border-gray-100 dark:border-gray-700 pt-4">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-gray-600">עובד</p>
+              <p className={MODAL_LABEL}>עובד</p>
               {draft.employees.length > 0 && (
                 <button
                   onClick={() => setDraft(d => ({ ...d, employees: [] }))}
@@ -355,25 +345,14 @@ export default function HoursReportDBFilter({
             </div>
 
             {/* Search */}
-            <div className="relative mb-2">
-              <Search size={13} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                value={employeeSearch}
-                onChange={e => setEmployeeSearch(e.target.value)}
-                placeholder="חפש עובד..."
-                dir="rtl"
-                className="w-full text-xs pr-8 pl-3 py-2 border border-gray-200 rounded-lg bg-gray-50 focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent"
-              />
-              {employeeSearch && (
-                <button
-                  onClick={() => setEmployeeSearch('')}
-                  className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                >
-                  <X size={12} />
-                </button>
-              )}
-            </div>
+            <SearchInput
+              value={employeeSearch}
+              onChange={setEmployeeSearch}
+              placeholder="חפש עובד..."
+              iconSize={13}
+              dir="rtl"
+              className="text-xs mb-2 border-gray-200 bg-gray-50 focus:ring-teal-400 py-2"
+            />
 
             {/* Options */}
             <div className="max-h-44 overflow-y-auto flex flex-col gap-0.5">
@@ -387,11 +366,11 @@ export default function HoursReportDBFilter({
                       key={e.id}
                       onClick={() => toggleEmployee(e.name)}
                       className={`flex items-center gap-2.5 px-2 py-2 rounded-lg cursor-pointer transition-colors ${
-                        checked ? 'bg-teal-50' : 'hover:bg-gray-50'
+                        checked ? 'bg-teal-50 dark:bg-teal-950/40' : 'hover:bg-gray-50 dark:hover:bg-gray-700'
                       }`}
                     >
                       <div className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 border transition-all ${
-                        checked ? 'bg-teal-500 border-teal-500' : 'border-gray-300 bg-white'
+                        checked ? 'bg-teal-500 border-teal-500' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'
                       }`}>
                         {checked && (
                           <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5">
@@ -399,7 +378,7 @@ export default function HoursReportDBFilter({
                           </svg>
                         )}
                       </div>
-                      <span className={`text-xs ${checked ? 'text-teal-800 font-medium' : 'text-gray-700'}`}>
+                      <span className={`text-xs ${checked ? 'text-teal-800 dark:text-teal-200 font-medium' : 'text-gray-700 dark:text-gray-200'}`}>
                         {e.name}
                       </span>
                     </label>
@@ -414,7 +393,7 @@ export default function HoursReportDBFilter({
                 {draft.employees.map(name => (
                   <span
                     key={name}
-                    className="inline-flex items-center gap-1 bg-teal-100 text-teal-800 text-xs px-2 py-0.5 rounded-full border border-teal-200"
+                    className="inline-flex items-center gap-1 bg-teal-100 dark:bg-teal-900/50 text-teal-800 dark:text-teal-200 text-xs px-2 py-0.5 rounded-full border border-teal-200 dark:border-teal-700"
                   >
                     {name}
                     <button type="button" onClick={() => toggleEmployee(name)} className="hover:text-teal-600">
@@ -428,14 +407,14 @@ export default function HoursReportDBFilter({
         </div>
 
         {/* Footer */}
-        <div className="flex gap-2 px-5 py-4 border-t border-gray-100 flex-shrink-0">
+        <div className={`${MODAL_FOOTER} flex gap-2`}>
           <button
             onClick={handleReset}
             disabled={isDefault}
             className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold rounded-xl border-2 transition-all ${
               isDefault
-                ? 'border-gray-100 text-gray-300 cursor-not-allowed'
-                : 'border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'
+                ? 'border-gray-100 dark:border-gray-700 text-gray-300 dark:text-gray-600 cursor-not-allowed'
+                : `${TASK_CTRL_BTN}`
             }`}
           >
             <RotateCcw size={12} />
@@ -448,7 +427,7 @@ export default function HoursReportDBFilter({
             className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-xs font-bold rounded-xl transition-all ${
               isDirty
                 ? 'bg-teal-500 hover:bg-teal-600 text-white shadow-sm'
-                : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                : 'bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'
             }`}
           >
             <RefreshCw size={13} />

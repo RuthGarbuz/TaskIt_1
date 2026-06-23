@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { X, AlertCircle, CheckCircle, Info, AlertTriangle } from 'lucide-react';
 
 interface MessageBoxProps {
@@ -9,7 +10,9 @@ interface MessageBoxProps {
   confirmText?: string;
   cancelText?: string;
   showCancel?: boolean;
-  onConfirm?: () => void;
+  checkboxLabel?: string;
+  checkboxDefaultChecked?: boolean;
+  onConfirm?: (checkboxChecked?: boolean) => void;
   onCancel?: () => void;
 }
 
@@ -22,9 +25,17 @@ export default function MessageBox({
   confirmText = 'אישור',
   cancelText = 'ביטול',
   showCancel = false,
+  checkboxLabel,
+  checkboxDefaultChecked = false,
   onConfirm,
   onCancel
 }: MessageBoxProps) {
+  const [checkboxChecked, setCheckboxChecked] = useState(checkboxDefaultChecked);
+
+  useEffect(() => {
+    if (isOpen) setCheckboxChecked(checkboxDefaultChecked);
+  }, [isOpen, checkboxDefaultChecked]);
+
   if (!isOpen) return null;
 
   const getIcon = () => {
@@ -55,15 +66,11 @@ export default function MessageBox({
 
     return (
         <>
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm">
-                <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 animate-scale-in">
-                    {/* Header */}
-                    <div className="flex items-center justify-between p-4 border-b border-gray-200">
-                        <h3 className="text-lg font-bold text-gray-800">{title}</h3>
-                        <button
-                            onClick={onClose}
-                            className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
-                        >
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                <div className="modal-shell dark-surface bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-md mx-4 animate-scale-in">
+                    <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+                        <h3 className="text-lg font-bold text-gray-800 dark:text-white">{title}</h3>
+                        <button onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors text-gray-500 dark:text-gray-400">
                             <X size={20} className="text-gray-500" />
                         </button>
                     </div>
@@ -75,21 +82,38 @@ export default function MessageBox({
                             <p className="text-center text-gray-700 whitespace-pre-line leading-relaxed">
                                 {message}
                             </p>
+                            {checkboxLabel && (
+                              <label className="flex items-center gap-2 cursor-pointer self-stretch justify-center text-sm text-gray-700">
+                                <input
+                                  type="checkbox"
+                                  checked={checkboxChecked}
+                                  onChange={e => setCheckboxChecked(e.target.checked)}
+                                  className="w-4 h-4 accent-emerald-500"
+                                />
+                                <span>{checkboxLabel}</span>
+                              </label>
+                            )}
                         </div>
                     </div>
 
                     {/* Footer */}
-                    <div className="flex gap-3 p-4 border-t border-gray-200">
+                    <div className="flex gap-3 p-4 border-t border-gray-200 dark:border-gray-700">
                       {showCancel && (
                         <button
                           onClick={onCancel ?? onClose}
-                          className="w-full px-4 py-2 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold transition-colors hover:bg-gray-100"
+                          className="w-full px-4 py-2 border-2 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded-lg font-semibold transition-colors hover:bg-gray-100 dark:hover:bg-gray-700"
                         >
                           {cancelText}
                         </button>
                       )}
                       <button
-                        onClick={onConfirm ?? onClose}
+                        onClick={() => {
+                          if (onConfirm) {
+                            onConfirm(checkboxLabel ? checkboxChecked : undefined);
+                          } else {
+                            onClose();
+                          }
+                        }}
                         className={`w-full px-4 py-2 text-white rounded-lg font-semibold transition-colors shadow-md ${getButtonColor()}`}
                       >
                         {confirmText}

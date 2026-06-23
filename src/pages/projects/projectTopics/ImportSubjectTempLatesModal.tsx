@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { X, Search, CheckCircle, Download, ChevronDown, ChevronRight } from 'lucide-react';
 import { getSubjectTemplates } from '../../../services/projectPlanningService';
 import type { SubjectTemplate } from '../../../Data/projectsData';
+import { DateInput } from '../../shared/DateInput';
+import SearchInput from '../../shared/SearchInput';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -133,19 +135,22 @@ const todayIso = () => new Date().toISOString().split('T')[0];
 
 // ─── Template Card ────────────────────────────────────────────────────────────
 function TemplateCard({
-  template, selected, expanded, importStartDate, onImportStartDateChange,
+  template, selected, expanded, importStartDate, continuous,
+  onImportStartDateChange, onContinuousChange,
   onToggleSelect, onToggleExpand,
 }: {
   template: SubjectTemplate;
   selected: boolean;
   expanded: boolean;
   importStartDate: string;
+  continuous: boolean;
   onImportStartDateChange: (iso: string) => void;
+  onContinuousChange: (checked: boolean) => void;
   onToggleSelect: () => void;
   onToggleExpand: () => void;
 }) {
   return (
-    <div className={`rounded-xl border-2 transition-all ${selected ? 'border-emerald-400 bg-emerald-50' : 'border-gray-200 bg-white hover:border-gray-300'}`}>
+    <div className={`rounded-xl border-2 transition-all ${selected ? 'border-emerald-400 bg-emerald-50 dark:bg-emerald-950/30' : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 hover:border-gray-300 dark:hover:border-gray-500'}`}>
       {/* Card header — dir rtl: last column sits visually on the left */}
       <div className="flex items-center gap-3 px-4 py-3" dir="rtl">
         {/* Checkbox */}
@@ -159,11 +164,11 @@ function TemplateCard({
         {/* Info */}
         <div className="flex-1 min-w-0" onClick={onToggleSelect} style={{ cursor: 'pointer' }}>
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-bold text-gray-800">{template.name}</span>
-            <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-semibold">{template.category}</span>
-            {selected && <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1"><CheckCircle size={11}/>נבחר</span>}
+            <span className="text-sm font-bold text-gray-800 dark:text-white">{template.name}</span>
+            <span className="bright-surface text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-semibold">{template.category}</span>
+            {selected && <span className="bright-surface text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1"><CheckCircle size={11}/>נבחר</span>}
           </div>
-          <div className="flex items-center gap-3 mt-1 text-xs text-gray-500 flex-wrap">
+          <div className="flex items-center gap-3 mt-1 text-xs text-gray-500 dark:text-gray-400 flex-wrap">
             <span>{template.stepsCount} שלבים</span>
             <span>•</span>
             <span>{template.tasksCount} משימות</span>
@@ -175,16 +180,26 @@ function TemplateCard({
         </div>
  {selected && (
           <div
-            className="shrink-0 flex flex-col gap-0.5 min-w-[9.5rem]"
+            className="shrink-0 flex items-end gap-3"
             onClick={e => e.stopPropagation()}
           >
-            <label className="text-[10px] font-semibold text-gray-600 whitespace-nowrap">תאריך התחלה</label>
-            <input
-              type="date"
-              value={importStartDate}
-              onChange={e => onImportStartDateChange(e.target.value)}
-              className="w-full text-xs border border-gray-300 rounded-md px-1.5 py-1 bg-white focus:ring-2 focus:ring-emerald-400 focus:border-emerald-500"
-            />
+            <div className="flex flex-col gap-0.5 min-w-[9.5rem]">
+              <label className="text-[10px] font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap">תאריך התחלה</label>
+              <DateInput
+                value={importStartDate}
+                onChange={onImportStartDateChange}
+                className="w-full text-xs border border-gray-300 dark:border-gray-600 rounded-md px-1.5 py-1 bg-white dark:bg-gray-700 text-gray-800 dark:text-white focus:ring-2 focus:ring-emerald-400 focus:border-emerald-500"
+              />
+            </div>
+            <label className="flex items-center gap-1.5 cursor-pointer pb-1 shrink-0">
+              <input
+                type="checkbox"
+                checked={continuous}
+                onChange={e => onContinuousChange(e.target.checked)}
+                className="w-4 h-4 accent-emerald-500"
+              />
+              <span className="text-xs font-semibold text-gray-700 whitespace-nowrap">רציף</span>
+            </label>
           </div>
         )}
         {/* Expand toggle */}
@@ -202,7 +217,7 @@ function TemplateCard({
 
       {/* Expanded steps preview */}
       {expanded && (
-        <div className="border-t border-gray-200 px-4 py-3 space-y-2 bg-gray-50 rounded-b-xl">
+        <div className="border-t border-gray-200 dark:border-gray-700 px-4 py-3 space-y-2 bg-gray-50 dark:bg-gray-900/40 rounded-b-xl">
           {template.steps.map(step => (
             <div key={step.id}>
               <div className="flex items-center gap-2 py-1">
@@ -229,10 +244,11 @@ function TemplateCard({
 export type ImportPlanningSubjectsPayload = {
   templates: SubjectTemplate[];
   startDateByTemplateId: Record<number, string>;
+  continuousByTemplateId: Record<number, boolean>;
 };
 
 interface ImportSubjectTemplatesModalProps {
-  onImport: (payload: ImportPlanningSubjectsPayload) => void;
+  onImport: (payload: ImportPlanningSubjectsPayload) => void | Promise<void>;
   onClose: () => void;
   projectId: number;
 }
@@ -243,6 +259,7 @@ export default function ImportSubjectTemplatesModal({ onImport, onClose, project
   const [selectedIds, setSelectedIds]   = useState<number[]>([]);
   const [expandedIds, setExpandedIds]   = useState<number[]>([]);
   const [startDateByTemplateId, setStartDateByTemplateId] = useState<Record<number, string>>({});
+  const [continuousByTemplateId, setContinuousByTemplateId] = useState<Record<number, boolean>>({});
   const [importBlockMsg, setImportBlockMsg] = useState('');
   const [templates, setTemplates] = useState<SubjectTemplate[]>([]);
 
@@ -295,6 +312,11 @@ export default function ImportSubjectTemplatesModal({ onImport, onClose, project
         const { [id]: _removed, ...rest } = d;
         return rest;
       });
+      setContinuousByTemplateId(d => {
+        if (adding) return { ...d, [id]: d[id] ?? true };
+        const { [id]: _removed, ...rest } = d;
+        return rest;
+      });
       return adding ? [...prev, id] : prev.filter(x => x !== id);
     });
   };
@@ -311,11 +333,17 @@ export default function ImportSubjectTemplatesModal({ onImport, onClose, project
       }
       return next;
     });
+    setContinuousByTemplateId(prev => {
+      const next = { ...prev };
+      for (const id of ids) next[id] = true;
+      return next;
+    });
   };
   const clearAll      = () => {
     setImportBlockMsg('');
     setSelectedIds([]);
     setStartDateByTemplateId({});
+    setContinuousByTemplateId({});
   };
 
   const setTemplateStartDate = (id: number, iso: string) => {
@@ -323,7 +351,12 @@ export default function ImportSubjectTemplatesModal({ onImport, onClose, project
     setStartDateByTemplateId(prev => ({ ...prev, [id]: iso }));
   };
 
-  const handleImport  = () => {
+  const setTemplateContinuous = (id: number, checked: boolean) => {
+    setImportBlockMsg('');
+    setContinuousByTemplateId(prev => ({ ...prev, [id]: checked }));
+  };
+
+  const handleImport = async () => {
     setImportBlockMsg('');
     const toImport = (templates ?? []).filter(t => selectedIds.includes(t.id));
     if (!toImport.length) return;
@@ -335,14 +368,22 @@ export default function ImportSubjectTemplatesModal({ onImport, onClose, project
       }
     }
     const startDateByTemplateIdSlice: Record<number, string> = {};
-    for (const t of toImport) startDateByTemplateIdSlice[t.id] = startDateByTemplateId[t.id]!;
-    onImport({ templates: toImport, startDateByTemplateId: startDateByTemplateIdSlice });
+    const continuousByTemplateIdSlice: Record<number, boolean> = {};
+    for (const t of toImport) {
+      startDateByTemplateIdSlice[t.id] = startDateByTemplateId[t.id]!;
+      continuousByTemplateIdSlice[t.id] = continuousByTemplateId[t.id] ?? true;
+    }
+    await onImport({
+      templates: toImport,
+      startDateByTemplateId: startDateByTemplateIdSlice,
+      continuousByTemplateId: continuousByTemplateIdSlice,
+    });
     onClose();
   };
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col" style={{ maxHeight: '88vh' }}>
+      <div className="modal-shell dark-surface bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-2xl flex flex-col" style={{ maxHeight: '88vh' }}>
 
         {/* Header */}
         <div className="flex-shrink-0 bg-gradient-to-r from-emerald-500 to-teal-600 px-6 py-4 rounded-t-2xl flex items-center justify-between">
@@ -361,24 +402,21 @@ export default function ImportSubjectTemplatesModal({ onImport, onClose, project
         </div>
 
         {/* Search + category filter */}
-        <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200 space-y-3">
-          <div className="relative">
-            <Search size={15} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="חיפוש לפי שם, קטגוריה, שלב או משימה..."
-              className="w-full pr-10 pl-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-400"
-            />
-          </div>
+        <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200 dark:border-gray-700 space-y-3">
+          <SearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="חיפוש לפי שם, קטגוריה, שלב או משימה..."
+            iconSize={15}
+            className="text-sm py-2.5 focus:ring-emerald-400"
+          />
           <div className="flex items-center gap-2 flex-wrap">
             {categories.map(cat => (
               <button key={cat} onClick={() => setActiveCategory(cat)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
                   activeCategory === cat
                     ? 'bg-emerald-500 text-white border-emerald-600'
-                    : 'bg-gray-50 text-gray-600 border-gray-300 hover:bg-gray-100'
+                    : 'bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-600'
                 }`}>
                 {cat}
               </button>
@@ -387,7 +425,7 @@ export default function ImportSubjectTemplatesModal({ onImport, onClose, project
         </div>
 
         {/* Select all / clear + count */}
-        <div className="flex-shrink-0 px-6 py-2 border-b border-gray-100 flex items-center justify-between bg-gray-50">
+        <div className="flex-shrink-0 px-6 py-2 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gray-50 dark:bg-gray-900/40">
           <div className="flex items-center gap-3">
             <button onClick={selectAll} className="text-xs text-emerald-600 font-semibold hover:underline">בחר הכל</button>
             <span className="text-gray-300">|</span>
@@ -413,7 +451,9 @@ export default function ImportSubjectTemplatesModal({ onImport, onClose, project
                 selected={selectedIds.includes(template.id)}
                 expanded={expandedIds.includes(template.id)}
                 importStartDate={startDateByTemplateId[template.id] ?? ''}
+                continuous={continuousByTemplateId[template.id] ?? true}
                 onImportStartDateChange={iso => setTemplateStartDate(template.id, iso)}
+                onContinuousChange={checked => setTemplateContinuous(template.id, checked)}
                 onToggleSelect={() => toggleSelect(template.id)}
                 onToggleExpand={() => toggleExpand(template.id)}
               />
@@ -428,8 +468,8 @@ export default function ImportSubjectTemplatesModal({ onImport, onClose, project
         )}
 
         {/* Footer */}
-        <div className="flex-shrink-0 border-t border-gray-200 px-6 py-4 flex gap-3 bg-white rounded-b-2xl">
-          <button onClick={onClose} className="flex-1 py-2.5 border-2 border-gray-300 rounded-lg text-sm font-semibold hover:bg-gray-50">
+        <div className="flex-shrink-0 border-t border-gray-200 dark:border-gray-700 px-6 py-4 flex gap-3 bg-white dark:bg-gray-800 rounded-b-2xl">
+          <button onClick={onClose} className="flex-1 py-2.5 border-2 border-gray-300 dark:border-gray-600 rounded-lg text-sm font-semibold hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200">
             ביטול
           </button>
           <button

@@ -1,0 +1,17 @@
+{
+  "name": "PlanIt",
+  "short_name": "PlanIt",
+  "description": "Task and project planning",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#059669",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

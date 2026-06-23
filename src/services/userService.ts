@@ -1,4 +1,3 @@
-import type { EmployeeNotification } from "../Data/projectsData";
 import type { UserListItem } from "../Data/settingsData";
 import authService from "./authService";
 

@@ -1,9 +1,15 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, forwardRef, useImperativeHandle } from 'react';
 import { Save, X } from 'lucide-react';
 import PlanningTopics, { type PlanningTopicsRef } from './PlanningTopics';
 import MessageBox from '../../shared/MessageBox';
+import type { SettingsTabHandle } from '../settingsTabHandle';
+import {
+  SETTINGS_BTN_SECONDARY,
+  SETTINGS_SECTION,
+  SETTINGS_TITLE,
+} from '../settingsTheme';
 
-export default function TemplatesSettings() {
+const TemplatesSettings = forwardRef<SettingsTabHandle>((_props, ref) => {
   const [activeTab, setActiveTab] = useState<'topics' | 'templates'>('topics');
   const planningTopicsRef = useRef<PlanningTopicsRef>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -50,6 +56,21 @@ export default function TemplatesSettings() {
       });
     });
 
+  useImperativeHandle(ref, () => ({
+    hasUnsavedChanges: () =>
+      activeTab === 'topics' && (planningTopicsRef.current?.hasUnsavedChanges() ?? false),
+    save: async () => {
+      if (activeTab === 'topics' && planningTopicsRef.current) {
+        await planningTopicsRef.current.save();
+      }
+    },
+    reload: async () => {
+      if (activeTab === 'topics' && planningTopicsRef.current) {
+        await planningTopicsRef.current.reload();
+      }
+    },
+  }));
+
   const handleSave = async () => {
     if (activeTab === 'topics' && planningTopicsRef.current) {
       try {
@@ -93,11 +114,11 @@ export default function TemplatesSettings() {
     <div className="space-y-6" dir="rtl">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h2 className="text-base sm:text-lg font-bold text-gray-800">תבניות ונושאי תכנון</h2>
+        <h2 className={`!text-lg sm:!text-xl ${SETTINGS_TITLE}`}>תבניות ונושאי תכנון</h2>
         <div className="flex gap-3">
           <button
             onClick={handleCancel}
-            className="flex items-center gap-2 px-6 py-2.5 border-2 border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-semibold text-sm transition-all"
+            className={SETTINGS_BTN_SECONDARY}
           >
             <X size={18} />
             ביטול
@@ -105,9 +126,7 @@ export default function TemplatesSettings() {
           <button
             onClick={handleSave}
             disabled={isSaving}
-            className="flex items-center justify-center gap-2 px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 font-semibold shadow-md text-sm w-full sm:w-auto disabled:bg-gray-400 disabled:cursor-not-allowed"
-
-            //className="flex items-center gap-2 px-6 py-2.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 font-bold shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            className="settings-header-btn flex items-center justify-center gap-2 px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 font-semibold shadow-md text-sm w-full sm:w-auto disabled:bg-gray-400 disabled:cursor-not-allowed"
           >
             <Save size={18} />
             {isSaving ? 'שומר...' : 'שמור שינויים'}
@@ -116,20 +135,20 @@ export default function TemplatesSettings() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-4 border-b-2 border-gray-200">
+      <div className="flex gap-4 border-b-2 border-gray-200 dark:border-gray-700">
         <button
           onClick={() => setActiveTab('topics')}
-          className={`px-4 py-2 font-semibold transition-all ${
+          className={`px-4 py-2 text-sm font-semibold transition-all ${
             activeTab === 'topics'
-              ? 'text-emerald-600 border-b-2 border-emerald-600'
-              : 'text-gray-500 hover:text-gray-700'
+              ? 'text-emerald-600 dark:text-emerald-400 border-b-2 border-emerald-600 dark:border-emerald-400'
+              : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
           }`}
         >
           נושאי תכנון
         </button>
         <button
           onClick={() => setActiveTab('templates')}
-          className={`hidden px-4 py-2 font-semibold transition-all ${
+          className={`hidden px-4 py-2 text-sm font-semibold transition-all ${
             activeTab === 'templates'
               ? 'text-emerald-600 border-b-2 border-emerald-600'
               : 'text-gray-500 hover:text-gray-700'
@@ -144,7 +163,7 @@ export default function TemplatesSettings() {
         <PlanningTopics ref={planningTopicsRef} />
       ) : (
         /* תבניות פרויקטים */
-        <div className="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
+        <div className={`text-center py-12 ${SETTINGS_SECTION} border-2 border-dashed border-gray-300 dark:border-gray-600`}>
           <p className="text-gray-500 text-lg font-semibold">תבניות פרויקטים</p>
           <p className="text-gray-400 text-sm mt-2">תוכן זה יפותח בהמשך</p>
         </div>
@@ -164,4 +183,8 @@ export default function TemplatesSettings() {
       />
     </div>
   );
-}
+});
+
+TemplatesSettings.displayName = 'TemplatesSettings';
+
+export default TemplatesSettings;

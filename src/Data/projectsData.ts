@@ -62,6 +62,11 @@ export interface PlanningTask {
   isNew?: boolean;
   isModified?: boolean;
   isDeleted?: boolean;
+  attachments: PlanningAttachment[];
+  hasHourReport?: boolean;
+  /** When true, save migrates step-level DB resources to this first task on a persisted step. */
+  migrateStepResourcesToFirstTask?: boolean;
+
 }
 
 export interface PlanningStep {
@@ -87,6 +92,9 @@ export interface PlanningStep {
   isNew?: boolean;
   isModified?: boolean;
   isDeleted?: boolean;
+  attachments?: PlanningAttachment[];
+  hasHourReport?: boolean;
+
 }
 
 export interface PlanningSubject {
@@ -127,6 +135,11 @@ export interface BasicQuery {
   database: string;
 }
 
+export interface BasicGetQuery {
+  database: string;
+  id: number;
+}
+
 export interface GetTasksRequest {
   database: string;
   projectId: number;
@@ -151,6 +164,19 @@ export interface GetMyTasksRequest {
   statusIds?: number[];
   priorityIds?: number[];
   closedTasks?: boolean;
+}
+
+export interface GetBillTasksRequest {
+  database: string;
+  projectId?: number | null;
+  employeeId: number;
+  permissionType: number;
+  fromDate: string | null;
+  toDate: string | null;
+  isSubmited?: boolean | null;
+  projectIds?: number[];
+  employeeIds?: number[];
+  statusIds?: number[];
 }
 
 export interface GetChatDataRequest {
@@ -203,7 +229,34 @@ export interface TaskReview {
   isPlanningSte: boolean;
   projectType:string
   studioDepartment: string
+  stepDependStatusID?: number;
+  taskDependStatusID?: number;
+  attachments?: PlanningAttachment[];
+  hasBill?: boolean;
+
 }
+
+export interface BillTaskReview extends TaskReview {
+  planningBillID: number;
+  billNote?: string | null;
+  isSubmited: boolean;
+}
+
+export interface SavePlanningBillRequest {
+  database: string;
+  planningTaskID: number;
+  employeeID: number;
+  isPlanningStep: boolean;
+  note?: string | null;
+  updatedByID: number;
+}
+
+export interface UpdateSubmitedBillRequest {
+  database: string;
+  id: number;
+  isSubmited: boolean;
+}
+
 export interface SubContractData {
 	stepName: string;
 	subContractName: string;
@@ -248,10 +301,16 @@ export type TaskParentDateCascade = {
   otherTaskDateUpdates?: { id: number; startDate: string; endDate: string; duration: number }[];
 };
 
+export type TaskStatusCascade = {
+  childTaskUpdates: { id: number; statuID: number; statusName: string }[];
+  syncChildEmployees: boolean;
+};
+
 export type TaskCardSaveOptions = {
   cascadeStage?: TaskCardCascadeStage;
   taskStepHoursCascade?: TaskStepHoursCascade;
   taskParentDateCascade?: TaskParentDateCascade;
+  statusCascade?: TaskStatusCascade;
 };
 
 export interface DependsOnStepData {
@@ -264,6 +323,9 @@ export interface DependsOnStepData {
   dependedByID: number | null;
   dependedBy_StartDate: string | null;
   dependedBy_EndDate: string | null;
+  // parentStep_StatuID?: number;
+  // parentStepID: number;
+
 }
 
 export interface DependsOnTaskData extends DependsOnStepData {
@@ -271,6 +333,9 @@ export interface DependsOnTaskData extends DependsOnStepData {
   parentStep_StartDate: string;
   parentStep_EndDate: string;
   parentStep_WorkHours: number;
+
+  parentStep_StatuID?: number;
+  
 }
 
 export interface PlanningHierarchyQuery {
@@ -278,11 +343,58 @@ export interface PlanningHierarchyQuery {
   projectId: number;
 }
 
+/** Query for `DELETE /Plannings/subject` — server `[FromQuery] DeleteQuery`. */
+export interface DeletePlanningSubjectQuery {
+  database: string;
+  /** Planning subject id */
+  id: number;
+}
+
 export interface PlanningHierarchyResponse {
   subjects: PlanningSubject[];
   subContracts?: SubContract[];
 }
 
+/** Query for `GET /Plannings/steps-by-project` */
+export interface PlanningStepQuery {
+  database: string;
+  projectID: number;
+  isClosed?: boolean | null;
+}
+
+export interface PlanningStepSubject {
+  id: number;
+  name: string;
+}
+
+export interface PlanningStepItem {
+  id: number;
+  planningSubjectId: number;
+  name: string;
+  isPlanningStep: boolean;
+}
+
+export interface PlanningStepByProjectResult {
+  subjects: PlanningStepSubject[];
+  steps: PlanningStepItem[];
+}
+ 
+export interface PlanningAttachment {
+  id: number;
+  entityType: 'step' | 'task';      // which table: PlanningStepAttachments / PlanningTaskAttachments
+  entityId: number;                  // PlanningStepID or PlanningTaskID
+  employeeId: number | null;         // [EmployeeID]
+  employeeName?: string;             // resolved on load for display — not saved
+  description: string;               // [Description]
+  fileLink: string;
+  /** true = external link; false = uploaded file */
+  isLink: boolean;
+  fileName?: string;                 // client-only: original filename for uploads
+  isNew?: boolean;
+  isModified?: boolean;
+  isDeleted?: boolean;
+}
+ 
 
 // Initial data - 2 levels only
 export const initialProjectsData: ProjectSection[] = [
@@ -377,6 +489,22 @@ export interface SubjectTemplate {
   stepsCount: number;
   tasksCount: number;
   steps: TemplateStep[];
+}
+
+/** One row from PlanningStepEmployeesLinkTemplates / PlanningTaskEmployeesLinkTemplates (API → import). */
+export interface PlanningTemplateEmployeeLinkSeed {
+  employeeId: number;
+  employeeName: string;
+  percentage: number;
+  workHours: number;
+  workDays: number;
+  duration: number;
+}
+
+/** Grouped by PlanningStepTemplateID / PlanningTaskTemplateID for import into project planning. */
+export interface PlanningTemplateEmployeeLinksMaps {
+  stepEmployeeLinks: Record<number, PlanningTemplateEmployeeLinkSeed[]>;
+  taskEmployeeLinks: Record<number, PlanningTemplateEmployeeLinkSeed[]>;
 }
 export interface EmployeeNotification {
   id: number;

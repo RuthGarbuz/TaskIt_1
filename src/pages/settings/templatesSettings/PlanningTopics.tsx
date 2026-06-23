@@ -3,10 +3,24 @@ import { Plus, Trash2, GripVertical, ChevronDown, ChevronRight, Users, Copy } fr
 import LinkEmployeesToStageModal from '../../shared/LinkEmployeesToStageModal';
 import type { EmployeeLink, PlanningStepEmployeeLinkTemplate, PlanningStepTemplate, PlanningSubjectTemplate, PlanningTaskEmployeeLinkTemplate, PlanningTaskTemplate } from '../../../Data/PlanningTemplates';
 import { deletePlanningSubjectTemplate, getPlanningTemplates, PlanningTemplates } from '../../../services/templatesSettingServices';
+import { hasPlanningTemplatesChanges } from '../planningTopicsDirty';
 import { getNumberOfHours } from '../../../services/settingService';
 import MessageBox from '../../shared/MessageBox';
+import NumberInput from '../../shared/NumberInput';
+import { BRIGHT_SURFACE } from '../../tasks/taskViewTheme';
+import { SETTINGS_FIELD } from '../settingsTheme';
 
 const DEFAULT_WORK_HOURS_PER_DAY = 8.00;
+
+/** Transparent 1×1 image — hides the browser drag ghost outside the drop zone */
+const EMPTY_DRAG_IMAGE = (() => {
+  const img = new Image();
+  img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+  return img;
+})();
+
+const taskStageKey = (subjectId: number, stageId: number) => `${subjectId}-${stageId}`;
+const stageSubjectKey = (subjectId: number) => String(subjectId);
 
 const byOrderNum = <T extends { orderNum?: number; id?: number }>(a: T, b: T): number => {
   const ao = a.orderNum ?? Number.MAX_SAFE_INTEGER;
@@ -15,8 +29,195 @@ const byOrderNum = <T extends { orderNum?: number; id?: number }>(a: T, b: T): n
   return (a.id ?? 0) - (b.id ?? 0);
 };
 
+const round2 = (n: number) => parseFloat(Number(n).toFixed(2));
+
+/** Scale task employee links to the new task hour budget (never above task; total capped proportionally). */
+function rescaleTaskEmployeesToTaskBudget(
+  employees: PlanningTaskEmployeeLinkTemplate[],
+  newTaskHours: number,
+  oldTaskHours: number,
+  hoursPerDay: number,
+): PlanningTaskEmployeeLinkTemplate[] {
+  // We intentionally rescale from `percentage` to match the user expectation:
+  // employee workHours/workDays must follow their percentage of the task budget.
+  void oldTaskHours; // kept for backward compatibility with existing callers
+
+  const nextRaw = employees.map(e => {
+    if (e.isDeleted) return e;
+    const nh = round2(Math.max(0, (newTaskHours * (e.percentage ?? 0)) / 100));
+    return {
+      ...e,
+      workHours: nh,
+      workDays: round2(nh / hoursPerDay),
+      isModified: !e.isNew,
+    };
+  });
+
+  const sumActive = nextRaw.filter(e => !e.isDeleted).reduce((a, e) => a + e.workHours, 0);
+  if (sumActive > newTaskHours && sumActive > 0) {
+    const k = newTaskHours / sumActive;
+    return nextRaw.map(e => {
+      if (e.isDeleted) return e;
+      const nh = round2(Math.max(0, e.workHours * k));
+      return { ...e, workHours: nh, workDays: round2(nh / hoursPerDay), isModified: !e.isNew };
+    });
+  }
+
+  return nextRaw;
+}
+
+function rescaleStageEmployeesToStageBudget(
+  employees: PlanningStepEmployeeLinkTemplate[],
+  newStageHours: number,
+  hoursPerDay: number,
+): PlanningStepEmployeeLinkTemplate[] {
+  const nextRaw = employees.map(e => {
+    if (e.isDeleted) return e;
+    const nh = round2(Math.max(0, (newStageHours * (e.percentage ?? 0)) / 100));
+    return {
+      ...e,
+      workHours: nh,
+      workDays: round2(nh / hoursPerDay),
+      isModified: !e.isNew,
+    };
+  });
+
+  const sumActive = nextRaw.filter(e => !e.isDeleted).reduce((a, e) => a + e.workHours, 0);
+  if (sumActive > newStageHours && sumActive > 0) {
+    const k = newStageHours / sumActive;
+    return nextRaw.map(e => {
+      if (e.isDeleted) return e;
+      const nh = round2(Math.max(0, e.workHours * k));
+      return { ...e, workHours: nh, workDays: round2(nh / hoursPerDay), isModified: !e.isNew };
+    });
+  }
+
+  return nextRaw;
+}
+
+/**
+ * After step work hours change: each non-deleted task gets
+ * `stepWorkHours × (taskPercentage / 100)` — percentages are not modified.
+ * If every task has 0%, hours are split evenly across tasks.
+ * Task employees: same `percentage` field; `workHours` / `workDays` scale to the new task budget.
+ */
+function applyStepWorkBudgetToTasks(
+  st: PlanningStepTemplate,
+  newStepHoursRaw: number,
+  hoursPerDay: number,
+): PlanningStepTemplate {
+  const newStepH = round2(Math.max(0, newStepHoursRaw));
+  const newStepD = round2(newStepH / hoursPerDay);
+
+  const visible = st.tasks.filter(t => !t.isDeleted);
+  if (visible.length === 0) {
+    return { ...st, workHours: newStepH, workDays: newStepD, isModified: !st.isNew };
+  }
+
+  const allocations = new Map<number, number>();
+  const anyTaskPct = visible.some(t => t.taskPercentage > 0);
+
+  if (anyTaskPct) {
+    visible.forEach(t => {
+      allocations.set(t.id, round2((newStepH * t.taskPercentage) / 100));
+    });
+  } else {
+    let consumed = 0;
+    const each = visible.length > 0 ? round2(newStepH / visible.length) : 0;
+    visible.forEach((t, i) => {
+      if (i === visible.length - 1) {
+        allocations.set(t.id, round2(Math.max(0, newStepH - consumed)));
+      } else {
+        allocations.set(t.id, each);
+        consumed = round2(consumed + each);
+      }
+    });
+  }
+
+  const tasks = st.tasks.map(t => {
+    if (t.isDeleted || !allocations.has(t.id)) return t;
+    const nh = allocations.get(t.id)!;
+    const nd = round2(nh / hoursPerDay);
+    const emps = rescaleTaskEmployeesToTaskBudget(t.employees, nh, t.workHours, hoursPerDay);
+    return {
+      ...t,
+      workHours: nh,
+      workDays: nd,
+      employees: emps,
+      isModified: !t.isNew,
+    };
+  });
+
+  return {
+    ...st,
+    workHours: newStepH,
+    workDays: newStepD,
+    employees: rescaleStageEmployeesToStageBudget(st.employees, newStepH, hoursPerDay),
+    tasks,
+    isModified: !st.isNew,
+  };
+}
+
+type ExpandSnapshot = {
+  subjectExpandedIds: Set<number>;
+  subjectExpandedNames: Set<string>;
+  stageExpandedKeys: Set<string>;
+};
+
+const captureExpandSnapshot = (list: PlanningSubjectTemplate[]): ExpandSnapshot => {
+  const subjectExpandedIds = new Set<number>();
+  const subjectExpandedNames = new Set<string>();
+  const stageExpandedKeys = new Set<string>();
+
+  for (const s of list) {
+    if (s.isExpanded) {
+      if (s.id > 0) subjectExpandedIds.add(s.id);
+      else subjectExpandedNames.add(s.name.trim());
+    }
+    for (const st of s.stages) {
+      if (!st.isExpanded) continue;
+      if (st.id > 0) stageExpandedKeys.add(`${s.id}:${st.id}`);
+      else if (s.id > 0) stageExpandedKeys.add(`${s.id}:o:${st.orderNum ?? 0}`);
+      else stageExpandedKeys.add(`n:${s.name.trim()}:o:${st.orderNum ?? 0}`);
+    }
+  }
+
+  return { subjectExpandedIds, subjectExpandedNames, stageExpandedKeys };
+};
+
+const resolveSubjectExpanded = (subject: PlanningSubjectTemplate, snap: ExpandSnapshot): boolean =>
+  snap.subjectExpandedIds.has(subject.id) ||
+  snap.subjectExpandedNames.has(subject.name.trim());
+
+const resolveStageExpanded = (
+  subject: PlanningSubjectTemplate,
+  stage: PlanningStepTemplate,
+  snap: ExpandSnapshot,
+): boolean =>
+  snap.stageExpandedKeys.has(`${subject.id}:${stage.id}`) ||
+  snap.stageExpandedKeys.has(`${subject.id}:o:${stage.orderNum ?? 0}`) ||
+  snap.stageExpandedKeys.has(`n:${subject.name.trim()}:o:${stage.orderNum ?? 0}`);
+
+const mapLoadedSubjects = (
+  data: PlanningSubjectTemplate[],
+  expandSnap?: ExpandSnapshot,
+): PlanningSubjectTemplate[] =>
+  data.map((subject) => ({
+    ...subject,
+    isExpanded: expandSnap ? resolveSubjectExpanded(subject, expandSnap) : false,
+    stages: [...subject.stages]
+      .sort(byOrderNum)
+      .map((stage) => ({
+        ...stage,
+        isExpanded: expandSnap ? resolveStageExpanded(subject, stage, expandSnap) : false,
+        tasks: [...stage.tasks].sort(byOrderNum),
+      })),
+  }));
+
 export interface PlanningTopicsRef {
   save: () => Promise<void>;
+  hasUnsavedChanges: () => boolean;
+  reload: () => Promise<void>;
 }
 
 const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
@@ -29,10 +230,14 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
     stageId: number;
     taskId: number;
   } | null>(null);
+  /** Stage task list currently under the pointer while dragging (null = outside → no drag styling) */
+  const [taskDragZoneKey, setTaskDragZoneKey] = useState<string | null>(null);
   const [draggingStage, setDraggingStage] = useState<{
     subjectId: number;
     stageId: number;
   } | null>(null);
+  /** Subject stages list currently under the pointer while dragging (null = outside → no drag styling) */
+  const [stageDragZoneKey, setStageDragZoneKey] = useState<string | null>(null);
   const [messageBox, setMessageBox] = useState<{
     isOpen: boolean;
     title: string;
@@ -79,30 +284,20 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
   } | null>(null);
 
   // ─── Data Loading ──────────────────────────────────────────────────────────
-  const loadPlanningTemplates = async () => {
+  const loadPlanningTemplates = async (preserveExpand?: ExpandSnapshot) => {
     try {
-      setIsLoading(true);
+      if (!preserveExpand) setIsLoading(true);
       const data = await getPlanningTemplates();
-      setSubjects(
-        data.map((subject: PlanningSubjectTemplate) => ({
-          ...subject,
-          stages: [...subject.stages]
-            .sort(byOrderNum)
-            .map((stage: PlanningStepTemplate) => ({
-              ...stage,
-              tasks: [...stage.tasks].sort(byOrderNum),
-            })),
-        }))
-      );
+      setSubjects(mapLoadedSubjects(data, preserveExpand));
     } catch (error) {
       console.error('Failed to load planning templates:', error);
       setMessageBox({ isOpen: true, title: 'שגיאה', message: 'שגיאה בטעינת תבניות תכנון', type: 'error' });
     } finally {
-      setIsLoading(false);
+      if (!preserveExpand) setIsLoading(false);
     }
   };
 
-  useEffect(() => { loadPlanningTemplates(); }, []);
+  useEffect(() => { void loadPlanningTemplates(); }, []);
 
   useEffect(() => {
     const loadHours = async () => {
@@ -122,13 +317,16 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
   useImperativeHandle(ref, () => ({
     save: async () => {
       try {
+        const expandSnap = captureExpandSnapshot(subjects);
         await PlanningTemplates(subjects);
-        await loadPlanningTemplates();
+        await loadPlanningTemplates(expandSnap);
       } catch (error) {
         console.error('Failed to save planning templates:', error);
         throw error;
       }
-    }
+    },
+    hasUnsavedChanges: () => hasPlanningTemplatesChanges(subjects),
+    reload: () => loadPlanningTemplates(),
   }));
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -265,12 +463,13 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
         stages: s.stages.map((st: PlanningStepTemplate) => {
           if (st.id !== stageId) return st;
           if (field === 'workHours') {
-            const h = Math.max(0, Number(value));
-            return { ...st, workHours: h, workDays: h / WORK_HOURS_PER_DAY, isModified: !st.isNew };
+            const h = Math.max(0, Number(value) || 0);
+            return applyStepWorkBudgetToTasks(st, h, WORK_HOURS_PER_DAY);
           }
           if (field === 'workDays') {
-            const d = Math.max(0, Number(value));
-            return { ...st, workDays: d, workHours: d * WORK_HOURS_PER_DAY, isModified: !st.isNew };
+            const d = Math.max(0, Number(value) || 0);
+            const h = d * WORK_HOURS_PER_DAY;
+            return applyStepWorkBudgetToTasks(st, h, WORK_HOURS_PER_DAY);
           }
           if (field === 'stepDuration') {
             const newDuration = Math.max(0, Math.floor(Number(value)));
@@ -376,7 +575,7 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
     const total = otherTotal + nextTaskHours;
     if (total <= stage.workHours) return { shouldAbort: false, updatedStageHours: null };
     const yes = await openConfirm(
-      `סה"כ השעות במשימות (${total.toFixed(2)}) גדול משעות השלב (${stage.workHours}).\n\nהאם לעדכן את שעות השלב?`
+      `סה"כ השעות במשימות (${total.toFixed(2)}) גדול משעות השלב (${stage.workHours.toFixed(2)}).\n\nהאם לעדכן את שעות השלב?`
     );
     if (!yes) return { shouldAbort: true, updatedStageHours: null };
     return { shouldAbort: false, updatedStageHours: total };
@@ -462,16 +661,42 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
         stages: s.stages.map((st: PlanningStepTemplate) =>
           st.id !== stageId ? st : {
             ...st,
-            ...(updatedStageHours !== null ? { workHours: updatedStageHours, workDays: updatedStageHours / WORK_HOURS_PER_DAY } : {}),
+            ...(updatedStageHours !== null
+              ? {
+                  workHours: updatedStageHours,
+                  workDays: updatedStageHours / WORK_HOURS_PER_DAY,
+                  employees: rescaleStageEmployeesToStageBudget(st.employees, updatedStageHours, WORK_HOURS_PER_DAY),
+                }
+              : {}),
             tasks: st.tasks.map((t: PlanningTaskTemplate) => {
               if (t.id !== taskId) return t;
               switch (field) {
-                case 'workHours':     return { ...t, workHours: nextTaskWorkHours ?? t.workHours, workDays: nextTaskWorkDays ?? t.workDays, isModified: !t.isNew };
-                case 'workDays':      return { ...t, workDays: nextTaskWorkDays ?? t.workDays, workHours: nextTaskWorkHours ?? t.workHours, isModified: !t.isNew };
+                case 'workHours': {
+                  const nh = nextTaskWorkHours ?? t.workHours;
+                  const nd = nextTaskWorkDays ?? t.workDays;
+                  const emps = rescaleTaskEmployeesToTaskBudget(t.employees, nh, t.workHours, WORK_HOURS_PER_DAY);
+                  return { ...t, workHours: nh, workDays: nd, employees: emps, isModified: !t.isNew };
+                }
+                case 'workDays': {
+                  const nd = nextTaskWorkDays ?? t.workDays;
+                  const nh = nextTaskWorkHours ?? t.workHours;
+                  const emps = rescaleTaskEmployeesToTaskBudget(t.employees, nh, t.workHours, WORK_HOURS_PER_DAY);
+                  return { ...t, workDays: nd, workHours: nh, employees: emps, isModified: !t.isNew };
+                }
                 case 'taskWorkHours':
-                case 'taskWorkDays':  return { ...t, workHours: nextTaskWorkHours ?? t.workHours, workDays: nextTaskWorkDays ?? t.workDays, taskPercentage: nextTaskPercentage ?? t.taskPercentage, isModified: !t.isNew };
+                case 'taskWorkDays': {
+                  const nh = nextTaskWorkHours ?? t.workHours;
+                  const nd = nextTaskWorkDays ?? t.workDays;
+                  const emps = rescaleTaskEmployeesToTaskBudget(t.employees, nh, t.workHours, WORK_HOURS_PER_DAY);
+                  return { ...t, workHours: nh, workDays: nd, taskPercentage: nextTaskPercentage ?? t.taskPercentage, employees: emps, isModified: !t.isNew };
+                }
                 case 'taskDuration':  return { ...t, taskDuration: nextTaskDuration ?? t.taskDuration };
-                case 'taskPercentage':return { ...t, taskPercentage: nextTaskPercentage ?? t.taskPercentage, workHours: nextTaskWorkHours ?? t.workHours, workDays: nextTaskWorkDays ?? t.workDays, isModified: !t.isNew };
+                case 'taskPercentage': {
+                  const nh = nextTaskWorkHours ?? t.workHours;
+                  const nd = nextTaskWorkDays ?? t.workDays;
+                  const emps = rescaleTaskEmployeesToTaskBudget(t.employees, nh, t.workHours, WORK_HOURS_PER_DAY);
+                  return { ...t, taskPercentage: nextTaskPercentage ?? t.taskPercentage, workHours: nh, workDays: nd, employees: emps, isModified: !t.isNew };
+                }
                 case 'dependsOnTaskId': return { ...t, dependsOnTaskId: value, isModified: !t.isNew };
                 default: return { ...t, [field]: value, isModified: !t.isNew };
               }
@@ -581,7 +806,12 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
   };
 
   // ─── Employee save handlers ────────────────────────────────────────────────
-  const saveStageEmployees = (subjectId: number, stageId: number, links: EmployeeLink[]) => {
+  const saveStageEmployees = (
+    subjectId: number,
+    stageId: number,
+    links: EmployeeLink[],
+    scope?: { stageHours: number; hoursPerDay: number },
+  ) => {
     const prevStage = getStage(subjectId, stageId);
     const prevEmployeeIds = new Set((prevStage?.employees ?? []).map(e => e.id).filter(id => id > 0));
     const nextEmployeeIds = new Set(links.map(l => l.id).filter(id => id > 0));
@@ -594,6 +824,11 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
       isNew: l.isNew, isModified: l.isModified, isDeleted: l.isDeleted,
     }));
 
+    const hpd = scope?.hoursPerDay && scope.hoursPerDay > 0 ? scope.hoursPerDay : WORK_HOURS_PER_DAY;
+    const nextStageH =
+      scope != null && Number.isFinite(scope.stageHours) ? round2(Math.max(0, scope.stageHours)) : null;
+    const nextStageD = nextStageH != null ? round2(nextStageH / hpd) : null;
+
     setSubjects(prev => prev.map((s: PlanningSubjectTemplate) =>
       s.id !== subjectId ? s : {
         ...s,
@@ -601,6 +836,9 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
         stages: s.stages.map((st: PlanningStepTemplate) =>
           st.id !== stageId ? st : {
             ...st,
+            ...(nextStageH != null && nextStageD != null
+              ? { workHours: nextStageH, workDays: nextStageD, isModified: !st.isNew }
+              : {}),
             employees: mapped,
             deletedEmployeeIds: Array.from(new Set([...(st.deletedEmployeeIds ?? []), ...deletedEmployeeIds])),
             isModified: !st.isNew
@@ -610,37 +848,71 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
     ));
   };
 
-  const saveTaskEmployees = (subjectId: number, stageId: number, taskId: number, links: EmployeeLink[]) => {
+  const saveTaskEmployees = (
+    subjectId: number,
+    stageId: number,
+    taskId: number,
+    links: EmployeeLink[],
+    scope?: { stageHours: number; hoursPerDay: number },
+  ) => {
     const prevTask = getTask(subjectId, stageId, taskId);
-    const prevEmployeeIds = new Set((prevTask?.employees ?? []).map(e => e.id).filter(id => id > 0));
+    if (!prevTask) return;
+
+    const prevEmployeeIds = new Set((prevTask.employees ?? []).map(e => e.id).filter(id => id > 0));
     const nextEmployeeIds = new Set(links.map(l => l.id).filter(id => id > 0));
     const deletedEmployeeIds = [...prevEmployeeIds].filter(id => !nextEmployeeIds.has(id));
 
     const mapped: PlanningTaskEmployeeLinkTemplate[] = links.map(l => ({
-      id: 0, employeeId: 0, linkId: l.linkId, employeeName: l.employeeName,
+      id: l.id, employeeId: l.employeeId, linkId: l.linkId, employeeName: l.employeeName,
       planningTaskTemplateId: taskId,
       percentage: l.percentage, workHours: l.workHours, workDays: l.workDays, taskDuration: l.duration,
       isNew: l.isNew, isModified: l.isModified, isDeleted: l.isDeleted,
     }));
 
+    const hpd = scope?.hoursPerDay && scope.hoursPerDay > 0 ? scope.hoursPerDay : WORK_HOURS_PER_DAY;
+    const hasScopeHours = scope != null && Number.isFinite(scope.stageHours);
+    const taskHours = hasScopeHours && scope ? round2(Math.max(0, scope.stageHours)) : prevTask.workHours;
+
     setSubjects(prev => prev.map((s: PlanningSubjectTemplate) =>
       s.id !== subjectId ? s : {
         ...s,
         isModified: !s.isNew,
-        stages: s.stages.map((st: PlanningStepTemplate) =>
-          st.id !== stageId ? st : {
+        stages: s.stages.map((st: PlanningStepTemplate) => {
+          if (st.id !== stageId) return st;
+
+          const otherTasksH = st.tasks
+            .filter((t: PlanningTaskTemplate) => t.id !== taskId && !t.isDeleted)
+            .reduce((sum, t) => sum + (t.workHours ?? 0), 0);
+          const finalStepH = hasScopeHours ? Math.max(st.workHours, otherTasksH + taskHours) : st.workHours;
+          const finalStepD = hasScopeHours ? round2(finalStepH / hpd) : st.workDays;
+
+          return {
             ...st,
-            isModified: !st.isNew,
-            tasks: st.tasks.map((t: PlanningTaskTemplate) =>
-              t.id !== taskId ? t : {
+            ...(hasScopeHours
+              ? { workHours: finalStepH, workDays: finalStepD, isModified: !st.isNew }
+              : {}),
+            tasks: st.tasks.map((t: PlanningTaskTemplate) => {
+              if (t.id !== taskId) {
+                if (t.isDeleted || !hasScopeHours) return t;
+                const pct = finalStepH > 0 ? round2(((t.workHours ?? 0) / finalStepH) * 100) : t.taskPercentage;
+                return { ...t, taskPercentage: pct, isModified: !t.isNew };
+              }
+              return {
                 ...t,
                 employees: mapped,
                 deletedEmployeeIds: Array.from(new Set([...(t.deletedEmployeeIds ?? []), ...deletedEmployeeIds])),
-                isModified: !t.isNew
-              }
-            )
-          }
-        )
+                ...(hasScopeHours
+                  ? {
+                      workHours: taskHours,
+                      workDays: round2(taskHours / hpd),
+                      taskPercentage: finalStepH > 0 ? round2((taskHours / finalStepH) * 100) : t.taskPercentage,
+                      isModified: !t.isNew,
+                    }
+                  : { isModified: !t.isNew }),
+              };
+            }),
+          };
+        }),
       }
     ));
   };
@@ -663,7 +935,8 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
           employeeId: e.employeeId, linkId: e.linkId, id: e.id, employeeName: e.employeeName,
           percentage: e.percentage, workHours: e.workHours, workDays: e.workDays, duration: e.taskDuration,
         })),
-        onSave: (links: EmployeeLink[]) => saveStageEmployees(subjectId, stageId, links),
+        onSave: (links: EmployeeLink[], scope?: { stageHours: number; hoursPerDay: number }) =>
+          saveStageEmployees(subjectId, stageId, links, scope),
       };
     } else {
       const t = getTask(subjectId, stageId, taskId!);
@@ -675,7 +948,8 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
           employeeId: e.employeeId, linkId: e.linkId, id: e.id, employeeName: e.employeeName,
           percentage: e.percentage, workHours: e.workHours, workDays: e.workDays, duration: e.taskDuration,
         })),
-        onSave: (links: EmployeeLink[]) => saveTaskEmployees(subjectId, stageId, taskId!, links),
+        onSave: (links: EmployeeLink[], scope?: { stageHours: number; hoursPerDay: number }) =>
+          saveTaskEmployees(subjectId, stageId, taskId!, links, scope),
       };
     }
   };
@@ -686,7 +960,7 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center p-8">
-        <div className="text-lg text-gray-600">טוען תבניות תכנון...</div>
+        <div className="text-lg text-gray-600 dark:text-gray-300">טוען תבניות תכנון...</div>
       </div>
     );
   }
@@ -694,10 +968,10 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
   return (
     <div className="space-y-4">
       {subjects.filter(s => !s.isDeleted).map((subject) => (
-        <div key={subject.id} className="border border-gray-300 rounded-lg overflow-hidden">
+        <div key={subject.id} className="border border-gray-300 dark:border-gray-600 rounded-lg overflow-hidden">
 
           {/* Subject header */}
-          <div className="bg-gray-100 px-4 py-3 flex items-center justify-between">
+          <div className="bg-gray-100 dark:bg-gray-800 px-4 py-3 flex items-center justify-between">
             <div className="flex items-center gap-3 flex-1">
               <button onClick={() => toggleSubject(subject.id)}>
                 {subject.isExpanded ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
@@ -705,30 +979,57 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
               <input
                 type="text" value={subject.name}
                 onChange={(e) => updateSubjectName(subject.id, e.target.value)}
-                className="font-bold text-lg px-3 py-1.5 border-2 border-gray-300 rounded flex-1 max-w-[450px] focus:ring-2 focus:ring-emerald-500"
+                className={`settings-section-title ${SETTINGS_FIELD} font-bold text-lg flex-1 max-w-[450px] focus:ring-2 focus:ring-emerald-500`}
               />
               <span className="bg-emerald-500 text-white px-3 py-1 rounded-full text-sm font-bold whitespace-nowrap">
                 {subject.stages.length} שלבים
               </span>
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={() => duplicateSubject(subject.id)} className="p-1.5 text-blue-500 hover:bg-blue-50 rounded" title="שכפל">
+              <button onClick={() => duplicateSubject(subject.id)} className="p-1.5 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded" title="שכפל">
                 <Copy size={18} />
               </button>
-              <button onClick={() => deleteSubject(subject.id)} className="p-1 text-red-500 hover:bg-red-50 rounded">
+              <button onClick={() => deleteSubject(subject.id)} className="p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded">
                 <Trash2 size={18} />
               </button>
             </div>
           </div>
 
           {subject.isExpanded && (
-            <div className="p-4 space-y-3 bg-gray-50">
+            <div className="p-4 space-y-3 bg-gray-50 dark:bg-gray-900/40">
 
-              {/* ── Stage column headers (once, above all stages) ── */}
+              {/* ── Stage column headers + stage rows (drag zone) ── */}
               {subject.stages.filter(st => !st.isDeleted).length > 0 && (
+                <div
+                  className="space-y-3"
+                  onDragEnter={(e) => {
+                    if (!draggingStage) return;
+                    e.preventDefault();
+                    if (draggingStage.subjectId === subject.id) {
+                      setStageDragZoneKey(stageSubjectKey(subject.id));
+                    }
+                  }}
+                  onDragOver={(e) => {
+                    if (!draggingStage) return;
+                    e.preventDefault();
+                    if (draggingStage.subjectId === subject.id) {
+                      e.dataTransfer.dropEffect = 'move';
+                      setStageDragZoneKey(stageSubjectKey(subject.id));
+                    } else {
+                      e.dataTransfer.dropEffect = 'none';
+                    }
+                  }}
+                  onDragLeave={(e) => {
+                    if (!draggingStage) return;
+                    const related = e.relatedTarget as Node | null;
+                    if (!related || !e.currentTarget.contains(related)) {
+                      setStageDragZoneKey(null);
+                    }
+                  }}
+                >
                 <div className="overflow-x-auto">
                   <div className="min-w-[1160px]">
-                    <div className="grid grid-cols-[18px_18px_18px_50px_1fr_80px_110px_110px_90px_160px_120px_36px] gap-2 px-2 py-1.5 bg-blue-200 rounded-lg text-xs font-bold text-gray-700">
+                    <div className={`grid grid-cols-[18px_18px_18px_50px_1fr_80px_110px_110px_90px_160px_120px_36px] gap-2 px-2 py-1.5 bg-blue-200 dark:bg-blue-900/40 rounded-lg text-xs font-bold text-gray-700 dark:text-blue-100`}>
                       <div />
                       <div />
                       <div />
@@ -737,44 +1038,73 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
                       <div className="text-center">אחוז</div>
                       <div className="text-center">שעות עבודה</div>
                       <div className="text-center">ימי עבודה</div>
-                      <div className="text-center">משך (ימים)</div>
-                      <div className="text-center">תלוי בשלב</div>
+                      <div className="text-center">משך זמן בימים</div>
+                      <div className="text-center">תלוי שלב</div>
                       <div className="text-center">קישור עובדים</div>
                       <div className="text-center">מחק</div>
                     </div>
                   </div>
                 </div>
-              )}
 
-              {[...subject.stages].filter(st => !st.isDeleted).sort(byOrderNum).map((stage, stageIndex) => (
-                <div key={stage.id} className="border-2 border-blue-300 rounded-lg bg-white overflow-hidden">
+              {[...subject.stages].filter(st => !st.isDeleted).sort(byOrderNum).map((stage, stageIndex) => {
+                const zoneKey = stageSubjectKey(subject.id);
+                const showStageDragStyle =
+                  draggingStage?.stageId === stage.id && stageDragZoneKey === zoneKey;
 
-                  {/* ── Single merged stage row ── */}
+                return (
+                <div
+                  key={stage.id}
+                  className={`border-2 border-blue-300 dark:border-blue-700 rounded-lg bg-white dark:bg-gray-800 ${
+                    stage.isExpanded ? 'overflow-visible' : 'overflow-hidden'
+                  }`}
+                >
+
+                  {/* ── Single merged stage row (above expanded tasks for hit-testing) ── */}
                   <div
-                    className={`overflow-x-auto bg-blue-50 ${draggingStage?.stageId === stage.id ? 'ring-2 ring-blue-300' : ''}`}
-                    draggable
-                    onDragStart={(e) => {
-                      setDraggingStage({ subjectId: subject.id, stageId: stage.id });
-                      e.dataTransfer.effectAllowed = 'move';
-                    }}
+                    className={`overflow-x-auto bg-blue-50 dark:bg-gray-800/60 shrink-0 relative z-30 isolate ${
+                      stage.isExpanded ? 'sticky top-0' : ''
+                    } ${showStageDragStyle ? 'opacity-60 ring-2 ring-blue-300' : ''}`}
                     onDragOver={(e) => {
+                      if (!draggingStage) return;
                       e.preventDefault();
-                      e.dataTransfer.dropEffect = 'move';
+                      e.stopPropagation();
+                      if (draggingStage.subjectId === subject.id) {
+                        e.dataTransfer.dropEffect = 'move';
+                      } else {
+                        e.dataTransfer.dropEffect = 'none';
+                      }
                     }}
                     onDrop={(e) => {
-                      e.preventDefault();
                       if (!draggingStage) return;
+                      e.preventDefault();
+                      e.stopPropagation();
                       if (draggingStage.subjectId !== subject.id) return;
                       moveStageRow(subject.id, draggingStage.stageId, stage.id);
                       setDraggingStage(null);
+                      setStageDragZoneKey(null);
                     }}
-                    onDragEnd={() => setDraggingStage(null)}
                   >
                     <div className="min-w-[1160px]">
                       <div className="grid grid-cols-[18px_18px_18px_50px_1fr_80px_110px_110px_90px_160px_120px_36px] gap-2 items-center px-2 py-2">
 
-                        {/* drag handle */}
-                        <GripVertical size={14} className="text-gray-400 cursor-grab active:cursor-grabbing" />
+                        {/* drag handle — only this cell starts stage drag (keeps buttons/inputs clickable) */}
+                        <div
+                          draggable
+                          onDragStart={(e) => {
+                            e.stopPropagation();
+                            setDraggingStage({ subjectId: subject.id, stageId: stage.id });
+                            setStageDragZoneKey(zoneKey);
+                            e.dataTransfer.effectAllowed = 'move';
+                            e.dataTransfer.setDragImage(EMPTY_DRAG_IMAGE, 0, 0);
+                          }}
+                          onDragEnd={() => {
+                            setDraggingStage(null);
+                            setStageDragZoneKey(null);
+                          }}
+                          className="flex items-center justify-center cursor-grab active:cursor-grabbing"
+                        >
+                          <GripVertical size={14} className="text-gray-400 pointer-events-none" />
+                        </div>
 
                         {/* expand toggle */}
                         <button onClick={() => toggleStage(subject.id, stage.id)} className="text-gray-500 hover:text-blue-600">
@@ -794,48 +1124,46 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
                         </div>
 
                         {/* stage number */}
-                        <div className="text-center text-sm font-bold text-gray-700 bg-gray-100 rounded py-1">{stageIndex + 1}</div>
+                        <div className="text-center text-sm font-bold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 rounded py-1">{stageIndex + 1}</div>
 
                         {/* stage name input */}
                         <input
-                          type="text" value={stage.stepName}
+                          type="text"
+                          value={stage.stepName}
                           onChange={(e) => updateStage(subject.id, stage.id, 'stepName', e.target.value)}
-                          className="font-bold px-2 py-1 border-2 border-gray-300 rounded focus:ring-2 focus:ring-blue-500 text-sm w-full"
+                          title={stage.stepName?.trim() ? stage.stepName : undefined}
+                          className={`min-w-0 w-full truncate font-bold ${SETTINGS_FIELD} text-sm focus:ring-2 focus:ring-blue-500`}
                         />
 
                         {/* step percentage */}
-                        <input
-                          type="number" min="0" max="100" step="0.01"
-                          value={parseFloat(stage.stepPercentage.toFixed(2))}
-                          onChange={(e) => updateStage(subject.id, stage.id, 'stepPercentage', e.target.value)}
-                          className="px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-blue-400"
+                        <NumberInput min={0} max={100} step={0.01}
+                          value={stage.stepPercentage}
+                          onChange={v => updateStage(subject.id, stage.id, 'stepPercentage', v)}
+                          className={`${SETTINGS_FIELD} text-sm text-center focus:ring-2 focus:ring-blue-400`}
                         />
 
                         {/* work hours */}
-                        <input
-                          type="number" step="0.01" min="0"
-                          value={stage.workHours}
-                          onChange={(e) => updateStage(subject.id, stage.id, 'workHours', e.target.value)}
-                          onBlur={(e) => updateStage(subject.id, stage.id, 'workHours', parseFloat(parseFloat(e.target.value).toFixed(2)) || 0)}
-                          className="px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-blue-400"
+                        <NumberInput step={0.01} min={0}
+                          value={Number(stage.workHours) || 0}
+                          onChange={v => updateStage(subject.id, stage.id, 'workHours', v)}
+                          onBlur={() => updateStage(subject.id, stage.id, 'workHours', round2(Number(stage.workHours) || 0))}
+                          className={`${SETTINGS_FIELD} text-sm text-center focus:ring-2 focus:ring-blue-400`}
                         />
 
                         {/* work days */}
-                        <input
-                          type="number" step="0.01" min="0"
-                          value={stage.workDays}
-                          onChange={(e) => updateStage(subject.id, stage.id, 'workDays', e.target.value)}
-                          onBlur={(e) => updateStage(subject.id, stage.id, 'workDays', parseFloat(parseFloat(e.target.value).toFixed(2)) || 0)}
-                          className="px-2 py-1 border-2 border-emerald-300 rounded text-sm text-center bg-emerald-50 font-bold focus:ring-2 focus:ring-emerald-500"
+                        <NumberInput step={0.01} min={0}
+                          value={Number(stage.workDays) || 0}
+                          onChange={v => updateStage(subject.id, stage.id, 'workDays', v)}
+                          onBlur={() => updateStage(subject.id, stage.id, 'workDays', round2(Number(stage.workDays) || 0))}
+                          className={`${BRIGHT_SURFACE} px-2 py-1 border-2 border-emerald-300 dark:border-emerald-600 rounded text-sm text-center bg-emerald-50 font-bold focus:ring-2 focus:ring-emerald-500`}
                         />
 
                         {/* step duration */}
-                        <input
-                          type="number" min="0" step="1"
+                        <NumberInput integerOnly min={0} step={1}
                           value={stage.stepDuration}
-                          onChange={(e) => updateStage(subject.id, stage.id, 'stepDuration', e.target.value)}
+                          onChange={v => updateStage(subject.id, stage.id, 'stepDuration', v)}
                           onBlur={() => capTaskDurations(subject.id, stage.id)}
-                          className="px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-blue-400"
+                          className={`${SETTINGS_FIELD} text-sm text-center focus:ring-2 focus:ring-blue-400`}
                         />
 
                         {/* depends on step */}
@@ -852,20 +1180,26 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
 
                         {/* link employees */}
                         <button
-                          onClick={() => openModal('stage', subject.id, stage.id)}
-                          className="flex items-center justify-center gap-1 px-2 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs font-bold shadow-sm"
+                        disabled={stage.tasks.length>0}
+                          type="button"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void openModal('stage', subject.id, stage.id);
+                          }}
+                          className="relative z-40 flex items-center justify-center gap-1 px-2 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs font-bold shadow-sm pointer-events-auto"
                         >
                           <Users size={13} />
                           קישור
                           {(stage.employees.length > 0 || stage.tasks.some(t => t.employees.length > 0)) && (
-                            <span className="bg-white text-blue-700 rounded-full px-1.5 text-[10px] font-bold">
+                            <span className="bright-surface bg-white text-blue-700 rounded-full px-1.5 text-[10px] font-bold">
                               {employeeCountForStage(stage)}
                             </span>
                           )}
                         </button>
 
                         {/* delete */}
-                        <button onClick={() => deleteStage(subject.id, stage.id)} className="p-1 text-red-500 hover:bg-red-100 rounded flex items-center justify-center">
+                        <button onClick={() => deleteStage(subject.id, stage.id)} className="p-1 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 rounded flex items-center justify-center">
                           <Trash2 size={14} />
                         </button>
 
@@ -875,11 +1209,45 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
 
                   {/* Tasks */}
                   {stage.isExpanded && (
-                    <div className="p-3 bg-purple-50">
+                    <div
+                      className="relative z-0 p-3 bg-purple-50 dark:bg-gray-900/30"
+                      onDragEnter={(e) => {
+                        if (!draggingTask) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (
+                          draggingTask.subjectId === subject.id &&
+                          draggingTask.stageId === stage.id
+                        ) {
+                          setTaskDragZoneKey(taskStageKey(subject.id, stage.id));
+                        }
+                      }}
+                      onDragOver={(e) => {
+                        if (!draggingTask) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (
+                          draggingTask.subjectId === subject.id &&
+                          draggingTask.stageId === stage.id
+                        ) {
+                          e.dataTransfer.dropEffect = 'move';
+                          setTaskDragZoneKey(taskStageKey(subject.id, stage.id));
+                        } else {
+                          e.dataTransfer.dropEffect = 'none';
+                        }
+                      }}
+                      onDragLeave={(e) => {
+                        if (!draggingTask) return;
+                        const related = e.relatedTarget as Node | null;
+                        if (!related || !e.currentTarget.contains(related)) {
+                          setTaskDragZoneKey(null);
+                        }
+                      }}
+                    >
                       <div className="overflow-x-auto">
                         <div className="min-w-[1100px]">
                           {/* Task column headers */}
-                          <div className="grid grid-cols-[40px_50px_1fr_80px_110px_110px_90px_160px_120px_60px] gap-2 px-2 py-2 bg-purple-200 rounded-lg text-xs font-bold text-gray-700">
+                          <div className={`grid grid-cols-[40px_50px_1fr_80px_110px_110px_90px_160px_120px_60px] gap-2 px-2 py-2 bg-purple-200 dark:bg-purple-900/40 rounded-lg text-xs font-bold text-gray-700 dark:text-purple-100`}>
                             <div></div>
                             <div className="text-center">מספ׳</div>
                             <div className="text-right">שם משימה</div>
@@ -887,67 +1255,92 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
                             <div className="text-center">שעות עבודה</div>
                             <div className="text-center">ימי עבודה</div>
                             <div className="text-center">משך זמן בימים</div>
-                            <div className="text-center">תלוי במשימה</div>
+                            <div className="text-center">תלוי משימה</div>
                             <div className="text-center">קישור עובדים</div>
                             <div className="text-center">מחק</div>
                           </div>
 
-                          {[...stage.tasks].filter(t => !t.isDeleted).sort(byOrderNum).map((task, taskIndex) => (
+                          {[...stage.tasks].filter(t => !t.isDeleted).sort(byOrderNum).map((task, taskIndex) => {
+                            const zoneKey = taskStageKey(subject.id, stage.id);
+                            const showTaskDragStyle =
+                              draggingTask?.taskId === task.id && taskDragZoneKey === zoneKey;
+
+                            return (
                             <div
                               key={task.id}
-                              draggable
-                              onDragStart={(e) => {
-                                setDraggingTask({ subjectId: subject.id, stageId: stage.id, taskId: task.id });
-                                e.dataTransfer.effectAllowed = 'move';
-                              }}
                               onDragOver={(e) => {
+                                if (!draggingTask) return;
                                 e.preventDefault();
-                                e.dataTransfer.dropEffect = 'move';
+                                e.stopPropagation();
+                                if (
+                                  draggingTask.subjectId === subject.id &&
+                                  draggingTask.stageId === stage.id
+                                ) {
+                                  e.dataTransfer.dropEffect = 'move';
+                                } else {
+                                  e.dataTransfer.dropEffect = 'none';
+                                }
                               }}
                               onDrop={(e) => {
-                                e.preventDefault();
                                 if (!draggingTask) return;
+                                e.preventDefault();
+                                e.stopPropagation();
                                 if (draggingTask.subjectId !== subject.id || draggingTask.stageId !== stage.id) return;
                                 moveTaskRow(subject.id, stage.id, draggingTask.taskId, task.id);
                                 setDraggingTask(null);
+                                setTaskDragZoneKey(null);
                               }}
-                              onDragEnd={() => setDraggingTask(null)}
-                              className={`grid grid-cols-[40px_50px_1fr_80px_110px_110px_90px_160px_120px_60px] gap-2 items-center px-2 py-2 bg-white border-b border-purple-200 rounded ${
-                                draggingTask?.taskId === task.id ? 'opacity-60 ring-2 ring-purple-300' : ''
+                              className={`grid grid-cols-[40px_50px_1fr_80px_110px_110px_90px_160px_120px_60px] gap-2 items-center px-2 py-2 bg-white dark:bg-gray-700 border-b border-purple-200 dark:border-purple-800 rounded ${
+                                showTaskDragStyle ? 'opacity-60 ring-2 ring-purple-300' : ''
                               }`}
                             >
-                              <GripVertical size={16} className="text-gray-400 cursor-grab active:cursor-grabbing" />
-                              <div className="text-center text-sm font-bold text-gray-700 bg-gray-100 rounded py-1">{taskIndex + 1}</div>
+                              <div
+                                draggable
+                                onDragStart={(e) => {
+                                  e.stopPropagation();
+                                  setDraggingTask({ subjectId: subject.id, stageId: stage.id, taskId: task.id });
+                                  setTaskDragZoneKey(zoneKey);
+                                  e.dataTransfer.effectAllowed = 'move';
+                                  e.dataTransfer.setDragImage(EMPTY_DRAG_IMAGE, 0, 0);
+                                }}
+                                onDragEnd={() => {
+                                  setDraggingTask(null);
+                                  setTaskDragZoneKey(null);
+                                }}
+                                className="flex items-center justify-center cursor-grab active:cursor-grabbing"
+                                title="גרור לשינוי סדר"
+                              >
+                                <GripVertical size={16} className="text-gray-400 pointer-events-none" />
+                              </div>
+                              <div className="text-center text-sm font-bold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-600 rounded py-1">{taskIndex + 1}</div>
                               <input
-                                type="text" value={task.taskName}
+                                type="text"
+                                value={task.taskName}
                                 onChange={(e) => updateTask(subject.id, stage.id, task.id, 'taskName', e.target.value)}
-                                className="px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-purple-400"
+                                title={task.taskName?.trim() ? task.taskName : undefined}
+                                className={`min-w-0 w-full truncate ${SETTINGS_FIELD} text-sm focus:ring-2 focus:ring-purple-400`}
                               />
-                              <input
-                                type="number" min="0" max="100" step="0.01"
-                                value={parseFloat(task.taskPercentage.toFixed(2))}
-                                onChange={(e) => updateTask(subject.id, stage.id, task.id, 'taskPercentage', e.target.value)}
-                                className="px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-purple-400"
+                              <NumberInput min={0} max={100} step={0.01}
+                                value={task.taskPercentage}
+                                onChange={v => updateTask(subject.id, stage.id, task.id, 'taskPercentage', v)}
+                                className={`${SETTINGS_FIELD} text-sm text-center focus:ring-2 focus:ring-purple-400`}
                               />
-                              <input
-                                type="number" step="0.01" min="0"
-                                value={task.workHours}
-                                onChange={(e) => updateTask(subject.id, stage.id, task.id, 'taskWorkHours', e.target.value)}
-                                onBlur={(e) => updateTask(subject.id, stage.id, task.id, 'taskWorkHours', parseFloat(parseFloat(e.target.value).toFixed(2)) || 0)}
-                                className="px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-purple-400"
+                              <NumberInput step={0.01} min={0}
+                                value={Number(task.workHours) || 0}
+                                onChange={v => updateTask(subject.id, stage.id, task.id, 'taskWorkHours', v)}
+                                onBlur={() => updateTask(subject.id, stage.id, task.id, 'taskWorkHours', round2(Number(task.workHours) || 0))}
+                                className={`${SETTINGS_FIELD} text-sm text-center focus:ring-2 focus:ring-purple-400`}
                               />
-                              <input
-                                type="number" step="0.01" min="0"
-                                value={task.workDays}
-                                onChange={(e) => updateTask(subject.id, stage.id, task.id, 'taskWorkDays', e.target.value)}
-                                onBlur={(e) => updateTask(subject.id, stage.id, task.id, 'taskWorkDays', parseFloat(parseFloat(e.target.value).toFixed(2)) || 0)}
-                                className="px-2 py-1 border-2 border-emerald-300 rounded text-sm text-center bg-emerald-50 font-bold focus:ring-2 focus:ring-emerald-500"
+                              <NumberInput step={0.01} min={0}
+                                value={Number(task.workDays) || 0}
+                                onChange={v => updateTask(subject.id, stage.id, task.id, 'taskWorkDays', v)}
+                                onBlur={() => updateTask(subject.id, stage.id, task.id, 'taskWorkDays', round2(Number(task.workDays) || 0))}
+                                className={`${BRIGHT_SURFACE} px-2 py-1 border-2 border-emerald-300 dark:border-emerald-600 rounded text-sm text-center bg-emerald-50 font-bold focus:ring-2 focus:ring-emerald-500`}
                               />
-                              <input
-                                type="number" min="0" step="1"
+                              <NumberInput integerOnly min={0} step={1}
                                 value={task.taskDuration}
-                                onChange={(e) => updateTask(subject.id, stage.id, task.id, 'taskDuration', e.target.value)}
-                                className="px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-purple-400"
+                                onChange={v => updateTask(subject.id, stage.id, task.id, 'taskDuration', v)}
+                                className={`${SETTINGS_FIELD} text-sm text-center focus:ring-2 focus:ring-purple-400`}
                               />
                               <div className="flex items-center justify-center">
                                 <input
@@ -966,17 +1359,18 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
                                 <Users size={14} />
                                 קישור
                                 {task.employees.length > 0 && (
-                                  <span className="bg-white text-purple-700 rounded-full px-1.5 text-[10px] font-bold">{task.employees.length}</span>
+                                  <span className="bright-surface bg-white text-purple-700 rounded-full px-1.5 text-[10px] font-bold">{task.employees.length}</span>
                                 )}
                               </button>
-                              <button onClick={() => deleteTask(subject.id, stage.id, task.id)} className="p-1 text-red-500 hover:bg-red-50 rounded mx-auto">
+                              <button onClick={() => deleteTask(subject.id, stage.id, task.id)} className="p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded mx-auto">
                                 <Trash2 size={14} />
                               </button>
                             </div>
-                          ))}
+                            );
+                          })}
 
                           {stage.tasks.filter(t => !t.isDeleted).length > 0 && (
-                            <div className="grid grid-cols-[40px_50px_1fr_80px_110px_110px_90px_160px_120px_60px] gap-2 items-center px-2 py-2 bg-blue-100 font-bold border-t-2 border-blue-300 rounded">
+                            <div className={`${BRIGHT_SURFACE} grid grid-cols-[40px_50px_1fr_80px_110px_110px_90px_160px_120px_60px] gap-2 items-center px-2 py-2 bg-blue-100 dark:bg-blue-900/30 font-bold border-t-2 border-blue-300 dark:border-blue-700 rounded`}>
                               <div></div><div></div>
                               <div className="text-right px-2 text-blue-800">סה"כ</div>
                               <div className="text-center text-blue-700">
@@ -997,7 +1391,7 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
 
                           <button
                             onClick={() => addTask(subject.id, stage.id)}
-                            className="w-full py-2 border-2 border-dashed border-purple-400 text-purple-700 hover:bg-purple-100 rounded text-sm font-bold mt-2 transition-all"
+                            className="w-full py-2 border-2 border-dashed border-purple-400 dark:border-purple-600 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/30 rounded text-sm font-bold mt-2 transition-all"
                           >
                             + הוסף משימה
                           </button>
@@ -1006,11 +1400,15 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
                     </div>
                   )}
                 </div>
-              ))}
+                );
+              })}
+
+                </div>
+              )}
 
               {/* Stages totals row */}
               {subject.stages.filter(st => !st.isDeleted).length > 0 && (
-                <div className="border-2 border-emerald-300 rounded-lg bg-emerald-50 ">
+                <div className={`${BRIGHT_SURFACE} border-2 border-emerald-300 dark:border-emerald-700 rounded-lg bg-emerald-50`}>
                   <div className="overflow-x-auto">
                     <div className="min-w-[1160px]">
                       <div className="grid grid-cols-[18px_18px_18px_50px_1fr_80px_110px_110px_90px_160px_120px_36px] gap-2 items-center px-2 py-2">
@@ -1037,7 +1435,7 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
 
               <button
                 onClick={() => addStage(subject.id)}
-                className="w-full py-3 border-2 border-dashed border-blue-400 text-blue-700 hover:bg-blue-50 rounded font-bold transition-all"
+                className="w-full py-3 border-2 border-dashed border-blue-400 dark:border-blue-600 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded font-bold transition-all"
               >
                 + הוסף שלב
               </button>
@@ -1055,6 +1453,7 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
       </button>
 
       {/* Notes */}
+      {false && (
       <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-4">
         <h4 className="font-bold text-yellow-900 mb-3 text-lg">💡 הערות</h4>
         <ul className="text-sm text-yellow-800 space-y-2">
@@ -1067,7 +1466,7 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
           <li>• שעות עבודה ביום: <strong>{WORK_HOURS_PER_DAY}</strong></li>
         </ul>
       </div>
-
+)}
       {/* Employee link modal */}
       {modalState?.open && modalProps && (
         <LinkEmployeesToStageModal
@@ -1077,8 +1476,9 @@ const PlanningTopics = forwardRef<PlanningTopicsRef>((_props, ref) => {
           stageHours={modalProps.stageHours}
           initialEmployees={modalProps.initialEmployees}
           hoursPerDay={WORK_HOURS_PER_DAY}
+          showHoursActualColumn={false}
           onClose={() => setModalState(null)}
-          onSave={(links) => { modalProps.onSave(links); setModalState(null); }}
+          onSave={(links, scope) => { modalProps.onSave(links, scope); setModalState(null); }}
         />
       )}
 

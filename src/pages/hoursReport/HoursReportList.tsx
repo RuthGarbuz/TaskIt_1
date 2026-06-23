@@ -5,25 +5,39 @@ import {
   ChevronsUpDown,
 } from 'lucide-react';
 
+import HorizontalScrollContainer from '../../components/HorizontalScrollContainer';
+import { APP_PANEL, BRIGHT_SURFACE, TASK_HEADER_FILTER_BTN_INACTIVE, TASK_TABLE_HEAD } from '../tasks/taskViewTheme';
 import HoursReportHeader from './HoursReportHeader';
 import HoursReportDbFilter, {
   getDefaultHoursDBFilters,
   countActiveHoursDbFilters,
 } from './HoursReportDbFilter';
 import { usePersistedHoursDbFilters } from '../../hooks/usePersistedHoursDbFilters';
+import { usePersistedSessionState, isHoursReportViewMode } from '../../hooks/usePersistedSessionState';
 import {
   formatDateHe, formatHours, getInitials,
   groupByDate, groupByEmployee, groupByProject,
 
-  type HourReportList, type HourReportProject, type HourReportStep, type HoursReport,
+  type HourReportList,
+  type HourReportPlanningSubject,
+  type HourReportProject,
+  type HourReportStep,
+  type HoursReport,
+  type PlanningHierarchyByProjectResult,
 } from '../../Data/HoursReportData';
 import type { TaskReview } from '../../Data/projectsData';
 import HoursReportModal from './HoursReportModal';
-import { deleteHourReport, getHourReportProjects, getHourReportStepsByProjectId, getHourReports } from '../../services/hourReportService';
+import {
+  deleteHourReport,
+  getHourReportProjects,
+  getHourReports,
+  getPlanningHierarchyByProjectId,
+} from '../../services/hourReportService';
 import authService from '../../services/authService';
 import AutoComplete from '../shared/AutoComplete';
 import SearchableCheckboxFilter from '../shared/SearchableCheckboxFilter';
 import MyTasksReportModal, { type ReportColumn, type ReportRow } from '../tasks/MyTasksReportModal';
+import MessageBox from '../shared/MessageBox';
 
 type ViewMode = 'all' | 'date' | 'employee' | 'project';
 type HoursColumnFilterKey = 'dateTime' | 'projectName' | 'employeeName';
@@ -73,7 +87,7 @@ function SortableTh({ sortKey, label, className, sort, onSort }: {
   sortKey: SortKey; label: string; className: string; sort: SortState; onSort: (k: SortKey) => void;
 }) {
   return (
-    <th className={`${className} cursor-pointer select-none hover:bg-gray-100 transition-colors`} onClick={() => onSort(sortKey)}>
+    <th className={`${className} cursor-pointer select-none hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors`} onClick={() => onSort(sortKey)}>
       <div className="flex items-center gap-1">
         <span>{label}</span>
         <SortIcon active={sort.key === sortKey} dir={sort.key === sortKey ? sort.dir : null} />
@@ -112,16 +126,16 @@ function DataRow({ r, onDelete, onEdit, hideDate, hideProject, hideEmployee }: {
 }) {
   const [hovered, setHovered] = useState(false);
   return (
-    <tr className="hover:bg-teal-50 transition-colors border-b border-gray-100 relative group"
+    <tr className="hover:bg-teal-50 dark:hover:bg-teal-900/20 transition-colors border-b border-gray-100 dark:border-gray-700 relative group"
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
       {!hideDate && (
         <td className="px-4 py-2.5">
-          <span className="text-xs font-semibold text-gray-700">{formatDateHe(r.dateTime)}</span>
+          <span className="text-xs font-semibold text-gray-700 dark:text-gray-200">{formatDateHe(r.dateTime)}</span>
         </td>
       )}
        <td className="px-3 py-2 max-w-[200px]">
                               <span
-                                className="text-xs font-medium text-gray-900 px-1 rounded block overflow-hidden"
+                                className="text-xs font-medium text-gray-900 dark:text-gray-100 px-1 rounded block overflow-hidden"
                                 style={{
                                   display: '-webkit-box',
                                   WebkitLineClamp: 2,
@@ -137,10 +151,10 @@ function DataRow({ r, onDelete, onEdit, hideDate, hideProject, hideEmployee }: {
         <div className="text-xs font-semibold text-gray-800 leading-snug">{r.taskName}</div>
       </td> */}
       <td className="px-4 py-2.5">
-        <div className="text-xs font-medium text-gray-700 leading-snug">{r.stepName}</div>
+        <div className="text-xs font-medium text-gray-700 dark:text-gray-200 leading-snug">{r.stepName}</div>
       </td>
       <td className="px-4 py-2.5">
-        <div className="text-xs font-medium text-gray-700 leading-snug">{r.subjectName}</div>
+        <div className="text-xs font-medium text-gray-700 dark:text-gray-200 leading-snug">{r.subjectName}</div>
       </td>
       {!hideProject && (
         <td className="px-4 py-2.5">
@@ -153,29 +167,29 @@ function DataRow({ r, onDelete, onEdit, hideDate, hideProject, hideEmployee }: {
             <div className={`w-6 h-6 rounded-full bg-gradient-to-br ${avatarColor(r.employeeName)} flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0`}>
               {getInitials(r.employeeName)}
             </div>
-            <span className="text-xs font-medium text-gray-700">{r.employeeName}</span>
+            <span className="text-xs font-medium text-gray-700 dark:text-gray-200">{r.employeeName}</span>
           </div>
         </td>
       )}
       <td className="px-4 py-2.5 text-center">
         {r.startTime
-          ? <span className="text-xs font-medium text-gray-700 bg-gray-100 px-2 py-1 rounded-lg">{r.startTime}</span>
+          ? <span className={`text-xs font-medium text-gray-700 ${BRIGHT_SURFACE} bg-gray-100 px-2 py-1 rounded-lg`}>{r.startTime}</span>
           : <span className="text-xs text-gray-400">—</span>}
       </td>
       <td className="px-4 py-2.5 text-center">
         {r.endTime
-          ? <span className="text-xs font-medium text-gray-700 bg-gray-100 px-2 py-1 rounded-lg">{r.endTime}</span>
+          ? <span className={`text-xs font-medium text-gray-700 ${BRIGHT_SURFACE} bg-gray-100 px-2 py-1 rounded-lg`}>{r.endTime}</span>
           : <span className="text-xs text-gray-400">—</span>}
       </td>
       <td className="px-4 py-2.5 text-center">
-        <span className="inline-flex items-center px-2.5 py-0.5 bg-teal-100 text-teal-700 rounded-full text-xs font-bold">
+        <span className={`inline-flex items-center px-2.5 py-0.5 ${BRIGHT_SURFACE} bg-teal-100 text-teal-700 rounded-full text-xs font-bold`}>
           {formatHours(r.hours)}
         </span>
       </td>
       <td className="px-4 py-2.5">
         {r.description
-          ? <span className="text-xs text-gray-500 italic">{r.description}</span>
-          : <span className="text-xs text-gray-300">—</span>}
+          ? <span className="text-xs text-gray-500 dark:text-gray-400 italic">{r.description}</span>
+          : <span className="text-xs text-gray-300 dark:text-gray-600">—</span>}
       </td>
       <td className="px-4 py-2.5 text-center">
         <div className="flex items-center justify-center gap-1">
@@ -185,7 +199,7 @@ function DataRow({ r, onDelete, onEdit, hideDate, hideProject, hideEmployee }: {
             <Edit2 size={13} />
           </button>
           <button onClick={() => onDelete(r.hoursReportID)}
-            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+            className="p-1.5 text-gray-400 dark:text-gray-500 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-all"
             title="מחק דיווח">
             <Trash2 size={13} />
           </button>
@@ -208,11 +222,11 @@ function HoursViewModal({ viewMode, onSelect, onClose }: {
   ];
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
-        <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-          <h2 className="text-xl font-bold text-gray-800">בחר תצוגה</h2>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-            <X size={20} className="text-gray-600" />
+      <div className="modal-shell dark-surface bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-md">
+        <div className="border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex items-center justify-between">
+          <h2 className="text-xl font-bold text-gray-800 dark:text-white">בחר תצוגה</h2>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors">
+            <X size={20} className="text-gray-600 dark:text-gray-300" />
           </button>
         </div>
         <div className="p-6 space-y-2">
@@ -220,8 +234,8 @@ function HoursViewModal({ viewMode, onSelect, onClose }: {
             <button key={opt.value} onClick={() => { onSelect(opt.value); onClose(); }}
               className={`w-full text-right px-4 py-3 rounded-lg font-medium transition-colors flex items-center gap-3 ${
                 viewMode === opt.value
-                  ? 'bg-teal-50 text-teal-700 border-2 border-teal-200'
-                  : 'hover:bg-gray-50 border-2 border-transparent text-gray-700'
+                  ? 'bright-surface bg-teal-50 text-teal-700 border-2 border-teal-200 dark:bg-teal-950/40 dark:text-teal-300 dark:border-teal-700'
+                  : 'hover:bg-gray-50 dark:hover:bg-gray-700 border-2 border-transparent text-gray-700 dark:text-gray-200'
               }`}>
               <opt.icon size={18} className={viewMode === opt.value ? 'text-teal-500' : 'text-gray-400'} />
               {opt.label}
@@ -233,16 +247,29 @@ function HoursViewModal({ viewMode, onSelect, onClose }: {
   );
 }
 
+/**
+ * Flat `Items` from hour-report planning API: when rows include `planningSubjectId`, filter by subject;
+ * otherwise show all items (server did not scope rows per subject).
+ */
+function hourReportStepItemsForSubject(items: HourReportStep[], subjectId: number): HourReportStep[] {
+  const scoped = items.some(i => i.planningSubjectId != null && i.planningSubjectId > 0);
+  if (!scoped) return items;
+  return items.filter(i => (i.planningSubjectId ?? 0) === subjectId);
+}
+
 // ── New Report Modal ──────────────────────────────────────────────────────────
 
 function NewReportSelectorModal({ onSelect, onClose }: {
   onSelect: (task: TaskReview) => void; onClose: () => void;
 }) {
   const [projects, setProjects] = useState<HourReportProject[]>([]);
-  const [steps, setSteps] = useState<HourReportStep[]>([]);
   const [projectsError, setProjectsError] = useState('');
-  const [stepsError, setStepsError] = useState('');
+  const [hierarchyError, setHierarchyError] = useState('');
+  const [hierarchyLoading, setHierarchyLoading] = useState(false);
+  const [hierarchyData, setHierarchyData] = useState<PlanningHierarchyByProjectResult | null>(null);
+  const [planningSubjects, setPlanningSubjects] = useState<HourReportPlanningSubject[]>([]);
   const [selectedProject, setSelectedProject] = useState<HourReportProject | null>(null);
+  const [selectedSubject, setSelectedSubject] = useState<HourReportPlanningSubject | null>(null);
   const [selectedStep, setSelectedStep] = useState<HourReportStep | null>(null);
 
   useEffect(() => {
@@ -262,27 +289,39 @@ function NewReportSelectorModal({ onSelect, onClose }: {
   }, []);
 
   useEffect(() => {
-    const loadSteps = async () => {
-      setStepsError('');
-      if (!selectedProject) { setSteps([]); return; }
-      const item = projects.find(p => p.id === selectedProject?.id);
-      if (!item) { setSteps([]); return; }
+    const loadHierarchy = async () => {
+      setHierarchyError('');
+      setHierarchyData(null);
+      setPlanningSubjects([]);
+      setSelectedSubject(null);
+      setSelectedStep(null);
+      if (!selectedProject) return;
+      setHierarchyLoading(true);
       try {
-        const data = await getHourReportStepsByProjectId(item.id, null);
-        setSteps(data);
+        const data = await getPlanningHierarchyByProjectId(selectedProject.id, null);
+        setHierarchyData(data);
+        setPlanningSubjects(data.subjects ?? []);
       } catch (error) {
-        setSteps([]);
-        setStepsError(error instanceof Error ? error.message : 'שגיאה בטעינת שלבים');
+        setHierarchyData(null);
+        setPlanningSubjects([]);
+        setHierarchyError(error instanceof Error ? error.message : 'שגיאה בטעינת נושאי תכנון');
+      } finally {
+        setHierarchyLoading(false);
       }
     };
-    void loadSteps();
-  }, [selectedProject, projects]);
+    void loadHierarchy();
+  }, [selectedProject]);
+
+  const stepItems = useMemo(() => {
+    if (!hierarchyData?.items?.length || !selectedSubject) return [];
+    return hourReportStepItemsForSubject(hierarchyData.items, selectedSubject.id);
+  }, [hierarchyData, selectedSubject]);
 
   const handleConfirm = () => {
-    if (!selectedProject || !selectedStep) return;
+    if (!selectedProject || !selectedSubject || !selectedStep) return;
     const fakeTask: TaskReview = {
       id: selectedStep?.id ?? 0, name: selectedStep?.name ?? '', stage: selectedStep?.name ?? '',
-      planningStepID: 0, planningSubjectName: '', percentage: 0,
+      planningStepID: 0, planningSubjectName: selectedSubject.name, percentage: 0,
       workHours: 0, workDays: 0, duration: 0, isActive: true,
       dependsOnStepID: false, dependsOnTaskID: false, startDate: '', endDate: '',
       senderID: 0, receivers: [], senderName: '', statuID: 0, statusName: '',
@@ -299,7 +338,7 @@ function NewReportSelectorModal({ onSelect, onClose }: {
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+      <div className="modal-shell dark-surface bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-sm">
         <div className="border-b px-6 py-4 flex items-center justify-between bg-gradient-to-r from-emerald-500 to-teal-600 rounded-t-2xl">
           <div className="flex items-center gap-2">
             <Clock size={20} className="text-white" />
@@ -310,25 +349,39 @@ function NewReportSelectorModal({ onSelect, onClose }: {
           </button>
         </div>
         <div className="p-6 space-y-4">
-          {projectsError && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{projectsError}</div>}
+          {projectsError && <div className="text-xs text-red-600 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg px-3 py-2">{projectsError}</div>}
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1.5">פרויקט</label>
+            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-200 mb-1.5">פרויקט</label>
             <AutoComplete items={projects} selectedItem={projects.find(p => p.id === selectedProject?.id) ?? null}
-              onSelect={item => { setSelectedProject(item); setSelectedStep(null); }}
+              onSelect={item => { setSelectedProject(item); }}
               getItemId={item => item.id} getItemLabel={item => item.name} placeholder="בחר פרויקט..." />
           </div>
-          {stepsError && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{stepsError}</div>}
+          {hierarchyError && <div className="text-xs text-red-600 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg px-3 py-2">{hierarchyError}</div>}
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1.5">שלב / משימה</label>
-            <AutoComplete items={steps} selectedItem={steps.find(s => s.id === selectedStep?.id) ?? null}
+            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-200 mb-1.5">נושא תכנון</label>
+            <AutoComplete
+              items={planningSubjects}
+              selectedItem={planningSubjects.find(s => s.id === selectedSubject?.id) ?? null}
+              onSelect={item => { setSelectedSubject(item); setSelectedStep(null); }}
+              getItemId={item => item.id}
+              getItemLabel={item => item.name}
+              placeholder={hierarchyLoading ? 'טוען נושאים...' : 'בחר נושא תכנון...'}
+              disabled={!selectedProject || hierarchyLoading || !!hierarchyError}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-200 mb-1.5">שלב / משימה</label>
+            <AutoComplete items={stepItems} selectedItem={stepItems.find(s => s.id === selectedStep?.id) ?? null}
               onSelect={item => setSelectedStep(item)}
               getItemId={item => item.id} getItemLabel={item => item.name}
-              placeholder="בחר שלב..." disabled={!selectedProject} />
+              placeholder="בחר שלב או משימה..."
+              disabled={!selectedSubject || hierarchyLoading}
+            />
           </div>
         </div>
-        <div className="border-t px-6 py-4 flex gap-3">
-          <button onClick={onClose} className="flex-1 py-2.5 border-2 border-gray-300 rounded-lg text-sm font-semibold hover:bg-gray-50">ביטול</button>
-          <button onClick={handleConfirm} disabled={!selectedProject || !selectedStep}
+        <div className="border-t border-gray-200 dark:border-gray-700 px-6 py-4 flex gap-3">
+          <button onClick={onClose} className={`flex-1 py-2.5 border-2 rounded-lg text-sm font-semibold hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 border-gray-300 dark:border-gray-600`}>ביטול</button>
+          <button onClick={handleConfirm} disabled={!selectedProject || !selectedSubject || !selectedStep}
             className="flex-1 bg-emerald-500 text-white py-2.5 rounded-lg text-sm font-bold hover:bg-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed">
             המשך
           </button>
@@ -344,7 +397,7 @@ export default function HoursReportList() {
   const [reports, setReports] = useState<HourReportList[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
-  const [viewMode, setViewMode] = useState<ViewMode>('all');
+  const [viewMode, setViewMode] = usePersistedSessionState<ViewMode>('taskit.ui.hoursReport.viewMode', 'all', isHoursReportViewMode);
   const [searchQuery, setSearchQuery] = useState('');
   const [hoursDbFilters, setHoursDbFilters] = usePersistedHoursDbFilters('taskit.hoursReport.dbFilters', getDefaultHoursDBFilters);
   const [showViewModal, setShowViewModal] = useState(false);
@@ -359,6 +412,42 @@ export default function HoursReportList() {
   const [showReportModal, setShowReportModal] = useState(false);
 
   const [sort, setSort] = useState<SortState>({ key: null, dir: null });
+  const [messageBox, setMessageBox] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: 'alert' | 'success' | 'error' | 'warning';
+    confirmText?: string;
+    cancelText?: string;
+    showCancel?: boolean;
+    onConfirm?: () => void;
+    onCancel?: () => void;
+  }>({ isOpen: false, title: '', message: '', type: 'warning' });
+
+  const closeMessageBox = () => {
+    setMessageBox(prev => ({
+      ...prev,
+      isOpen: false,
+      showCancel: false,
+      onConfirm: undefined,
+      onCancel: undefined,
+    }));
+  };
+
+  const openConfirm = (message: string, title = 'אישור'): Promise<boolean> =>
+    new Promise(resolve => {
+      setMessageBox({
+        isOpen: true,
+        title,
+        message,
+        type: 'warning',
+        showCancel: true,
+        confirmText: 'אישור',
+        cancelText: 'ביטול',
+        onConfirm: () => { resolve(true); closeMessageBox(); },
+        onCancel: () => { resolve(false); closeMessageBox(); },
+      });
+    });
 
   const handleSort = (key: SortKey) => {
     setSort(prev => {
@@ -464,6 +553,8 @@ export default function HoursReportList() {
   const activeFilters = useMemo(() => countActiveHoursDbFilters(hoursDbFilters) + columnFilterCount, [hoursDbFilters, columnFilterCount]);
 
   const handleDelete = async (id: number) => {
+    const yes = await openConfirm('האם למחוק דיווח זה?', 'מחיקת דיווח');
+    if (!yes) return;
     await deleteHourReport(id);
     setReports(prev => prev.filter(r => r.hoursReportID !== id));
   };
@@ -518,9 +609,9 @@ export default function HoursReportList() {
   // ─── Shared thead ─────────────────────────────────────────────────────────
   const renderThead = () => (
     <thead>
-      <tr className="bg-gray-50 border-b border-gray-200">
+      <tr className={TASK_TABLE_HEAD}>
         {!hideDate && (
-          <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 w-28 relative">
+          <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 dark:text-gray-300 w-28 relative">
             <div className="flex items-center justify-between gap-1">
               <div
                 className="flex items-center gap-1 cursor-pointer select-none hover:text-teal-600"
@@ -534,8 +625,8 @@ export default function HoursReportList() {
                 onClick={() => setOpenColumnFilter(c => c === 'dateTime' ? null : 'dateTime')}
                 className={`p-1 rounded-md border transition-colors shrink-0 ${
                   isColumnFilterActive('dateTime')
-                    ? 'bg-emerald-100 text-emerald-700 border-emerald-300'
-                    : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-100'
+                    ? 'bright-surface bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-900/40 dark:text-emerald-300 dark:border-emerald-700'
+                    : TASK_HEADER_FILTER_BTN_INACTIVE
                 }`}
                 title="סינון תאריך"
               >
@@ -543,10 +634,10 @@ export default function HoursReportList() {
               </button>
             </div>
             {openColumnFilter === 'dateTime' && (
-              <div className="absolute mt-2 z-50 right-0 w-72 rounded-xl border border-gray-200 bg-white shadow-xl p-3">
+              <div className="absolute mt-2 z-50 right-0 w-72 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 dark-surface shadow-xl p-3">
                 <div className="flex items-center justify-between mb-3">
-                  <span className="text-sm font-semibold text-gray-800">סינון תאריך</span>
-                  <button type="button" onClick={() => setOpenColumnFilter(null)} className="p-1 rounded-md text-gray-500 hover:bg-gray-100">
+                  <span className="text-sm font-semibold text-gray-800 dark:text-white">סינון תאריך</span>
+                  <button type="button" onClick={() => setOpenColumnFilter(null)} className="p-1 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">
                     <X size={14} />
                   </button>
                 </div>
@@ -564,17 +655,17 @@ export default function HoursReportList() {
         )}
 
         <SortableTh sortKey="taskName" label="משימה"
-          className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 min-w-[7rem]"
+          className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 dark:text-gray-300 min-w-[7rem]"
           sort={sort} onSort={handleSort} />
         <SortableTh sortKey="stepName" label="שלב"
-          className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 min-w-[7rem]"
+          className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 dark:text-gray-300 min-w-[7rem]"
           sort={sort} onSort={handleSort} />
         <SortableTh sortKey="subjectName" label="נושא תכנון"
-          className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 min-w-[8rem]"
+          className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 dark:text-gray-300 min-w-[8rem]"
           sort={sort} onSort={handleSort} />
 
         {!hideProject && (
-          <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 w-46 relative">
+          <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 dark:text-gray-300 w-46 relative">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-1 cursor-pointer select-none hover:text-teal-600"
                 onClick={() => handleSort('projectName')}>
@@ -583,16 +674,16 @@ export default function HoursReportList() {
               </div>
               <button type="button"
                 onClick={() => setOpenColumnFilter(c => c === 'projectName' ? null : 'projectName')}
-                className={`p-1 rounded-md border transition-colors ${isColumnFilterActive('projectName') ? 'bg-emerald-100 text-emerald-700 border-emerald-300' : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-100'}`}
+                className={`p-1 rounded-md border transition-colors ${isColumnFilterActive('projectName') ? 'bright-surface bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-900/40 dark:text-emerald-300 dark:border-emerald-700' : TASK_HEADER_FILTER_BTN_INACTIVE}`}
                 title="סינון פרויקט">
                 <Filter size={12} />
               </button>
             </div>
             {openColumnFilter === 'projectName' && (
-              <div className="absolute mt-2 z-50 right-0 w-72 rounded-xl border border-gray-200 bg-white shadow-xl p-3">
+              <div className="absolute mt-2 z-50 right-0 w-72 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 dark-surface shadow-xl p-3">
                 <div className="flex items-center justify-between mb-3">
-                  <span className="text-sm font-semibold text-gray-800">סינון פרויקט</span>
-                  <button type="button" onClick={() => setOpenColumnFilter(null)} className="p-1 rounded-md text-gray-500 hover:bg-gray-100"><X size={14} /></button>
+                  <span className="text-sm font-semibold text-gray-800 dark:text-white">סינון פרויקט</span>
+                  <button type="button" onClick={() => setOpenColumnFilter(null)} className="p-1 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"><X size={14} /></button>
                 </div>
                 <SearchableCheckboxFilter
                   searchValue={columnFilterSearch.projectName}
@@ -608,7 +699,7 @@ export default function HoursReportList() {
         )}
 
         {!hideEmployee && (
-          <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 w-36 relative">
+          <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 dark:text-gray-300 w-36 relative">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-1 cursor-pointer select-none hover:text-teal-600"
                 onClick={() => handleSort('employeeName')}>
@@ -617,16 +708,16 @@ export default function HoursReportList() {
               </div>
               <button type="button"
                 onClick={() => setOpenColumnFilter(c => c === 'employeeName' ? null : 'employeeName')}
-                className={`p-1 rounded-md border transition-colors ${isColumnFilterActive('employeeName') ? 'bg-emerald-100 text-emerald-700 border-emerald-300' : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-100'}`}
+                className={`p-1 rounded-md border transition-colors ${isColumnFilterActive('employeeName') ? 'bright-surface bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-900/40 dark:text-emerald-300 dark:border-emerald-700' : TASK_HEADER_FILTER_BTN_INACTIVE}`}
                 title="סינון עובד">
                 <Filter size={12} />
               </button>
             </div>
             {openColumnFilter === 'employeeName' && (
-              <div className="absolute mt-2 z-50 right-0 w-72 rounded-xl border border-gray-200 bg-white shadow-xl p-3">
+              <div className="absolute mt-2 z-50 right-0 w-72 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 dark-surface shadow-xl p-3">
                 <div className="flex items-center justify-between mb-3">
-                  <span className="text-sm font-semibold text-gray-800">סינון עובד מדווח</span>
-                  <button type="button" onClick={() => setOpenColumnFilter(null)} className="p-1 rounded-md text-gray-500 hover:bg-gray-100"><X size={14} /></button>
+                  <span className="text-sm font-semibold text-gray-800 dark:text-white">סינון עובד מדווח</span>
+                  <button type="button" onClick={() => setOpenColumnFilter(null)} className="p-1 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"><X size={14} /></button>
                 </div>
                 <SearchableCheckboxFilter
                   searchValue={columnFilterSearch.employeeName}
@@ -641,12 +732,12 @@ export default function HoursReportList() {
           </th>
         )}
 
-        <th className="px-4 py-2.5 text-center text-xs font-semibold text-gray-500 w-20">משעה</th>
-        <th className="px-4 py-2.5 text-center text-xs font-semibold text-gray-500 w-20">עד שעה</th>
+        <th className="px-4 py-2.5 text-center text-xs font-semibold text-gray-500 dark:text-gray-300 w-20">משעה</th>
+        <th className="px-4 py-2.5 text-center text-xs font-semibold text-gray-500 dark:text-gray-300 w-20">עד שעה</th>
         <SortableTh sortKey="hours" label='סה"כ שעות'
-          className="px-4 py-2.5 text-center text-xs font-semibold text-gray-500 w-24"
+          className="px-4 py-2.5 text-center text-xs font-semibold text-gray-500 dark:text-gray-300 w-24"
           sort={sort} onSort={handleSort} />
-        <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 w-32">הערות</th>
+        <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 dark:text-gray-300 w-32">הערות</th>
         <th className="px-4 py-2.5 w-20"></th>
       </tr>
     </thead>
@@ -659,7 +750,7 @@ export default function HoursReportList() {
     headerClass: string,
     rows: HourReportList[]
   ) => (
-    <div key={groupKey} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+    <div key={groupKey} className={`${APP_PANEL} rounded-xl shadow-sm overflow-hidden`}>
       <div
         className={`px-6 py-3 flex items-center justify-between cursor-pointer ${headerClass}`}
         onClick={() => toggleGroup(groupKey)}
@@ -673,17 +764,17 @@ export default function HoursReportList() {
         <span className="text-white text-sm opacity-80">({rows.length} דיווחים)</span>
       </div>
       {!collapsed.has(groupKey) && (
-        <div className="overflow-x-auto">
+        <HorizontalScrollContainer>
           <table className="w-full table-fixed min-w-[1180px]">
             {renderThead()}
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
               {sortGroup(rows).map(r => (
                 <DataRow key={r.hoursReportID} r={r} onDelete={handleDelete} onEdit={handleEdit}
                   hideDate={hideDate} hideProject={hideProject} hideEmployee={hideEmployee} />
               ))}
             </tbody>
           </table>
-        </div>
+        </HorizontalScrollContainer>
       )}
     </div>
   );
@@ -703,21 +794,21 @@ export default function HoursReportList() {
       
 
       {loadError && (
-        <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">{loadError}</div>
+        <div className="bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl px-4 py-3 text-sm text-red-700 dark:text-red-300">{loadError}</div>
       )}
 
       {isLoading && (
-        <div className="bg-white rounded-xl border border-gray-200 py-16 text-center">
-          <Clock size={40} className="text-gray-300 mx-auto mb-3 animate-pulse" />
-          <div className="text-gray-500 font-medium">טוען דיווחי שעות...</div>
+        <div className={`${APP_PANEL} rounded-xl py-16 text-center`}>
+          <Clock size={40} className="text-gray-300 dark:text-gray-600 mx-auto mb-3 animate-pulse" />
+          <div className="text-gray-500 dark:text-gray-300 font-medium">טוען דיווחי שעות...</div>
         </div>
       )}
 
       {!isLoading && filtered.length === 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 py-16 text-center">
-          <Clock size={40} className="text-gray-300 mx-auto mb-3" />
-          <div className="text-gray-400 font-medium">לא נמצאו דיווחי שעות</div>
-          <div className="text-gray-300 text-sm mt-1">נסה לשנות את פרמטרי החיפוש</div>
+        <div className={`${APP_PANEL} rounded-xl py-16 text-center`}>
+          <Clock size={40} className="text-gray-300 dark:text-gray-600 mx-auto mb-3" />
+          <div className="text-gray-400 dark:text-gray-300 font-medium">לא נמצאו דיווחי שעות</div>
+          <div className="text-gray-300 dark:text-gray-500 text-sm mt-1">נסה לשנות את פרמטרי החיפוש</div>
         </div>
       )}
 
@@ -725,19 +816,19 @@ export default function HoursReportList() {
         <>
           {/* ── הצג הכל ── */}
           {viewMode === 'all' && (
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-              <div className="overflow-x-auto">
+            <div className={`${APP_PANEL} rounded-xl shadow-sm overflow-hidden`}>
+              <HorizontalScrollContainer>
                 <table className="w-full table-fixed min-w-[1180px]">
                   {renderThead()}
-                  <tbody className="divide-y divide-gray-100">
+                  <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                     {sortedFiltered.map(r => (
                       <DataRow key={r.hoursReportID} r={r} onDelete={handleDelete} onEdit={handleEdit} />
                     ))}
                   </tbody>
-                  <tfoot className="bg-teal-50 border-t-2 border-teal-200">
+                  <tfoot className="bg-teal-50 dark:bg-teal-950/40 border-t-2 border-teal-200 dark:border-teal-800">
                     <tr>
                       <td colSpan={totalCols - 3} className="px-4 py-2.5">
-                        <span className="text-sm font-bold text-teal-800">סה"כ: {filtered.length} דיווחים</span>
+                        <span className="text-sm font-bold text-teal-800 dark:text-teal-200">סה"כ: {filtered.length} דיווחים</span>
                       </td>
                       <td className="px-4 py-2.5 text-center">
                         <span className="inline-flex items-center px-3 py-0.5 bg-teal-500 text-white rounded-full text-sm font-bold">
@@ -748,7 +839,7 @@ export default function HoursReportList() {
                     </tr>
                   </tfoot>
                 </table>
-              </div>
+              </HorizontalScrollContainer>
             </div>
           )}
 
@@ -835,11 +926,11 @@ export default function HoursReportList() {
             <ul className="space-y-2">
               <li className="flex items-start gap-2 text-sm text-amber-800">
                 <span className="text-amber-500 mt-0.5">•</span>
-                <span>רשימת דיווחי שעות יופיעו לפי ההרשאות</span>
+                <span><strong>הרשאות צפייה:</strong> רשימת דיווחי השעות בהתאם לרמת ההרשאה שנקבעה למשתמש במערכת.</span>
               </li>
               <li className="flex items-start gap-2 text-sm text-amber-800">
                 <span className="text-amber-500 mt-0.5">•</span>
-                <span>אפשר לשנות תצוגה לרשימה, לקבץ לפי קטגוריה, עדיפות ועוד</span>
+                <span><strong>ניהול תצוגה וחיתוכים:</strong> ניתן לשנות את מבנה התצוגה מרשימה לקיבוץ ולסנן את הדיווחים באופן דינמי</span>
               </li>
             </ul>
           </div>
@@ -850,6 +941,19 @@ export default function HoursReportList() {
           onDelete={handleDelete}
         />
       )}
+
+      <MessageBox
+        isOpen={messageBox.isOpen}
+        onClose={closeMessageBox}
+        title={messageBox.title}
+        message={messageBox.message}
+        type={messageBox.type}
+        confirmText={messageBox.confirmText ?? 'אישור'}
+        cancelText={messageBox.cancelText ?? 'ביטול'}
+        showCancel={messageBox.showCancel}
+        onConfirm={messageBox.onConfirm}
+        onCancel={messageBox.onCancel}
+      />
     </div>
     
     

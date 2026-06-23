@@ -204,7 +204,12 @@ export interface LinkEmployeesToStageModalProps {
   hoursPerDay: number;
   statusId?: number;
   itemType?: 'stage' | 'task';
+  /** When false, hides the reported-hours column (e.g. planning templates). Default true. */
+  showHoursActualColumn?: boolean;
   initialEmployees?: EmployeeLink[];
   onClose: () => void;
-  onSave: (employees: EmployeeLink[]) => void;
+  onSave: (
+    employees: EmployeeLink[],
+    scope?: { stageHours: number; hoursPerDay: number }
+  ) => void | boolean | Promise<void | boolean>;
 }

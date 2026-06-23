@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Filter, BarChart2, Search, List } from 'lucide-react';
+import { Filter, BarChart2, List } from 'lucide-react';
+import SearchInput from '../pages/shared/SearchInput';
 
 interface Task {
   id: number;
@@ -17,6 +18,7 @@ interface Task {
 }
 
 export default function ProjectTasksTab() {
+  const [searchQuery, setSearchQuery] = useState('');
   const [tasks] = useState<Task[]>([
     {
       id: 1,
@@ -97,14 +99,14 @@ export default function ProjectTasksTab() {
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="חפש משימות..."
-              className="pr-10 pl-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 w-64"
-            />
-          </div>
+          <SearchInput
+            value={searchQuery}
+            onChange={setSearchQuery}
+            placeholder="חפש משימות..."
+            iconSize={16}
+            className="text-sm w-64"
+            wrapperClassName="w-64"
+          />
           <button className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-sm">
             <BarChart2 size={16} />
             <span>גאנט</span>

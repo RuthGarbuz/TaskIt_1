@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { Plus, Trash2, Save, Star } from 'lucide-react';
 import { useSystemTables } from '../../../hooks/useSettings';
 import { initialSystemTables } from '../../../Data/settingsData';
@@ -14,10 +14,17 @@ import {
 } from '../../../services/settingService';
 import type { StatusItem, PriorityItem } from '../../../types/settings';
 import MessageBox from '../../shared/MessageBox';
+import NumberInput from '../../shared/NumberInput';
 import ConfirmDialog from '../../../components/ConfirmDialog';
+import type { SettingsTabHandle } from '../settingsTabHandle';
+import {
+  SETTINGS_FIELD,
+  SETTINGS_ROW_CARD,
+  SETTINGS_SECTION_SM,
+  SETTINGS_TITLE,
+} from '../settingsTheme';
 
-
-export default function SystemTablesSettings() {
+const SystemTablesSettings = forwardRef<SettingsTabHandle>((_props, ref) => {
   const {
     statuses,
     priorities,
@@ -47,23 +54,24 @@ export default function SystemTablesSettings() {
     onConfirm: () => void;
   }>({ isOpen: false, title: '', message: '', onConfirm: () => {} });
 
+  const loadData = async () => {
+    try {
+      const [fetchedStatuses, fetchedPriorities] = await Promise.all([
+        getStatuses(),
+        getPriorities()
+      ]);
+      setStatuses(fetchedStatuses);
+      setPriorities(fetchedPriorities);
+      setOriginalStatuses(JSON.parse(JSON.stringify(fetchedStatuses)));
+      setOriginalPriorities(JSON.parse(JSON.stringify(fetchedPriorities)));
+    } catch (error) {
+      console.error('Failed to load system tables:', error);
+      setMessageBox({ isOpen: true, title: 'שגיאה', message: 'שגיאה בטעינת טבלאות מערכת', type: 'error' });
+    }
+  };
+
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        const [fetchedStatuses, fetchedPriorities] = await Promise.all([
-          getStatuses(),
-          getPriorities()
-        ]);
-        setStatuses(fetchedStatuses);
-        setPriorities(fetchedPriorities);
-        setOriginalStatuses(JSON.parse(JSON.stringify(fetchedStatuses)));
-        setOriginalPriorities(JSON.parse(JSON.stringify(fetchedPriorities)));
-      } catch (error) {
-        console.error('Failed to load system tables:', error);
-        setMessageBox({ isOpen: true, title: 'שגיאה', message: 'שגיאה בטעינת טבלאות מערכת', type: 'error' });
-      }
-    };
-    loadData();
+    void loadData();
   }, []);
 
   const handleAddStatus = async () => {
@@ -232,38 +240,57 @@ export default function SystemTablesSettings() {
     });
   };
 
-  const handleSave = async () => {
+  const getChangedStatuses = () =>
+    statuses.filter(status => {
+      const original = originalStatuses.find(orig => orig.id === status.id);
+      if (!original) return false;
+      return (
+        original.name !== status.name ||
+        original.color !== status.color ||
+        original.progressPercentage !== status.progressPercentage ||
+        original.isDefault !== status.isDefault ||
+        original.isActive !== status.isActive
+      );
+    });
+
+  const getChangedPriorities = () =>
+    priorities.filter(priority => {
+      const original = originalPriorities.find(orig => orig.id === priority.id);
+      if (!original) return false;
+      return (
+        original.name !== priority.name ||
+        original.color !== priority.color ||
+        original.isDefault !== priority.isDefault ||
+        original.isActive !== priority.isActive
+      );
+    });
+
+  const persistSave = async (showFeedback: boolean) => {
+    const changedStatuses = getChangedStatuses();
+    const changedPriorities = getChangedPriorities();
+
+    if (changedStatuses.length === 0 && changedPriorities.length === 0) {
+      if (showFeedback) {
+        setMessageBox({ isOpen: true, title: 'אין שינויים', message: 'אין שינויים לשמירה', type: 'warning' });
+      }
+      return;
+    }
+
     try {
       setIsSaving(true);
-      const changedStatuses = statuses.filter(status => {
-        const original = originalStatuses.find(orig => orig.id === status.id);
-        if (!original) return false;
-        return original.name !== status.name ||
-          original.color !== status.color ||
-          original.progressPercentage !== status.progressPercentage ||
-          original.isDefault !== status.isDefault ||
-          original.isActive !== status.isActive;
-      });
-      const changedPriorities = priorities.filter(priority => {
-        const original = originalPriorities.find(orig => orig.id === priority.id);
-        if (!original) return false;
-        return original.name !== priority.name ||
-          original.color !== priority.color ||
-          original.isDefault !== priority.isDefault ||
-          original.isActive !== priority.isActive;
-      });
-      if (changedStatuses.length === 0 && changedPriorities.length === 0) {
-        setMessageBox({ isOpen: true, title: 'אין שינויים', message: 'אין שינויים לשמירה', type: 'warning' });
-        setIsSaving(false);
-        return;
-      }
       const statusPromises = changedStatuses.map(status => {
         if (status.name === '') {
-          setMessageBox({ isOpen: true, title: 'אין שם לסטטוס', message: 'אנא הזן שם לסטטוס לפני השמירה', type: 'warning' });
+          if (showFeedback) {
+            setMessageBox({
+              isOpen: true,
+              title: 'אין שם לסטטוס',
+              message: 'אנא הזן שם לסטטוס לפני השמירה',
+              type: 'warning',
+            });
+          }
           const origionalStatuse = originalStatuses.find(s => s.id === status.id);
           status.name = origionalStatuse ? origionalStatuse.name : status.name;
-          setIsSaving(false);
-          return;
+          throw new Error('Status name required');
         }
         return updateStatus(status);
       });
@@ -271,24 +298,38 @@ export default function SystemTablesSettings() {
       await Promise.all([...statusPromises, ...priorityPromises]);
       setOriginalStatuses(JSON.parse(JSON.stringify(statuses)));
       setOriginalPriorities(JSON.parse(JSON.stringify(priorities)));
-      setMessageBox({ isOpen: true, title: 'הצלחה', message: 'הטבלאות נשמרו בהצלחה!', type: 'success' });
+      if (showFeedback) {
+        setMessageBox({ isOpen: true, title: 'הצלחה', message: 'הטבלאות נשמרו בהצלחה!', type: 'success' });
+      }
     } catch (error) {
       console.error('Failed to save system tables:', error);
-      setMessageBox({ isOpen: true, title: 'שגיאה', message: 'שגיאה בשמירת הטבלאות', type: 'error' });
+      if (showFeedback) {
+        setMessageBox({ isOpen: true, title: 'שגיאה', message: 'שגיאה בשמירת הטבלאות', type: 'error' });
+      }
+      throw error;
     } finally {
       setIsSaving(false);
     }
   };
 
+  useImperativeHandle(ref, () => ({
+    hasUnsavedChanges: () =>
+      getChangedStatuses().length > 0 || getChangedPriorities().length > 0,
+    save: () => persistSave(false),
+    reload: loadData,
+  }));
+
+  const handleSave = () => void persistSave(true);
+
   return (
     <div className="space-y-4 sm:space-y-6 w-full">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
-        <h3 className="text-base sm:text-lg font-bold text-gray-800">טבלאות מערכת</h3>
+        <h3 className={`!text-lg sm:!text-xl ${SETTINGS_TITLE}`}>טבלאות מערכת</h3>
         <button
           onClick={handleSave}
           disabled={isSaving}
-          className="flex items-center justify-center gap-2 px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 font-semibold shadow-md text-sm w-full sm:w-auto disabled:bg-gray-400 disabled:cursor-not-allowed"
+          className="settings-header-btn flex items-center justify-center gap-2 px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 font-semibold shadow-md text-sm w-full sm:w-auto disabled:bg-gray-400 disabled:cursor-not-allowed"
         >
           <Save size={16} />
           {isSaving ? 'שומר...' : 'שמור'}
@@ -296,8 +337,8 @@ export default function SystemTablesSettings() {
       </div>
 
       {/* סטטוס שלב / משימה */}
-      <div className="bg-gray-50 rounded-lg p-3 sm:p-4 border border-gray-200">
-        <h4 className="text-sm sm:text-base font-bold text-gray-800 mb-3">סטטוס שלב / משימה</h4>
+      <div className={SETTINGS_SECTION_SM}>
+        <h4 className={`text-sm sm:text-base ${SETTINGS_TITLE} mb-3`}>סטטוס שלב / משימה</h4>
         <div className="overflow-x-auto">
           <div className="min-w-[650px] space-y-2">
             {/* Headers */}
@@ -312,13 +353,13 @@ export default function SystemTablesSettings() {
 
             {/* Status List */}
             {statuses.map((status) => (
-              <div key={status.id} className="grid grid-cols-[1fr_80px_100px_80px_60px_60px] gap-2 items-center bg-white p-2 rounded-lg border border-gray-200">
+              <div key={status.id} className={`grid grid-cols-[1fr_80px_100px_80px_60px_60px] gap-2 items-center ${SETTINGS_ROW_CARD} p-2`}>
                 <input
                   type="text"
                   value={status.name}
                   onChange={(e) => updateStatusState(status.id, 'name', e.target.value)}
                   disabled={status.name === 'הושלם'}
-                  className="px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  className={`${SETTINGS_FIELD} text-xs sm:text-sm disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:cursor-not-allowed`}
                 />
                 <div className="flex items-center gap-1 justify-center">
                   <input
@@ -330,14 +371,14 @@ export default function SystemTablesSettings() {
                   />
                 </div>
                 <div className="flex items-center justify-center gap-1">
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
+                  <NumberInput
+                    integerOnly
+                    min={0}
+                    max={100}
                     value={status.progressPercentage}
-                    onChange={(e) => updateStatusState(status.id, 'progressPercentage', Number(e.target.value))}
+                    onChange={v => updateStatusState(status.id, 'progressPercentage', v)}
                     disabled={status.name === 'הושלם'}
-                    className="w-full px-2 py-1.5 text-xs sm:text-sm text-center border border-gray-300 rounded focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                    className={`w-full ${SETTINGS_FIELD} text-xs sm:text-sm text-center disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:cursor-not-allowed`}
                     style={{ backgroundColor: status.color, color: 'white', fontWeight: 'bold' }}
                   />
                   <span className="text-xs text-gray-600">%</span>
@@ -401,12 +442,12 @@ export default function SystemTablesSettings() {
                 />
               </div>
               <div className="flex items-center gap-1">
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
+                <NumberInput
+                  integerOnly
+                  min={0}
+                  max={100}
                   value={newStatus.progressPercentage}
-                  onChange={(e) => setNewStatus({ ...newStatus, progressPercentage: Number(e.target.value) })}
+                  onChange={v => setNewStatus({ ...newStatus, progressPercentage: v })}
                   className="w-full px-2 py-1.5 text-xs sm:text-sm text-center border-2 border-emerald-400 rounded focus:ring-2 focus:ring-emerald-500"
                   style={{ backgroundColor: newStatus.color, color: 'white', fontWeight: 'bold' }}
                 />
@@ -427,8 +468,8 @@ export default function SystemTablesSettings() {
       </div>
 
       {/* עדיפות שלב / משימה */}
-      <div className="bg-gray-50 rounded-lg p-3 sm:p-4 border border-gray-200">
-        <h4 className="text-sm sm:text-base font-bold text-gray-800 mb-3">עדיפות שלב / משימה</h4>
+      <div className={SETTINGS_SECTION_SM}>
+        <h4 className={`text-sm sm:text-base ${SETTINGS_TITLE} mb-3`}>עדיפות שלב / משימה</h4>
         <div className="overflow-x-auto">
           <div className="min-w-[550px] space-y-2">
             {/* Headers */}
@@ -442,12 +483,12 @@ export default function SystemTablesSettings() {
 
             {/* Priority List */}
             {priorities.map((priority) => (
-              <div key={priority.id} className="grid grid-cols-[1fr_80px_80px_60px_60px] gap-2 items-center bg-white p-2 rounded-lg border border-gray-200">
+              <div key={priority.id} className={`grid grid-cols-[1fr_80px_80px_60px_60px] gap-2 items-center ${SETTINGS_ROW_CARD} p-2`}>
                 <input
                   type="text"
                   value={priority.name}
                   onChange={(e) => updatePriorityState(priority.id, 'name', e.target.value)}
-                  className="px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded focus:ring-2 focus:ring-emerald-500"
+                  className={`${SETTINGS_FIELD} text-xs sm:text-sm`}
                 />
                 <div className="flex items-center gap-1 justify-center">
                   <input
@@ -544,4 +585,8 @@ export default function SystemTablesSettings() {
       />
     </div>
   );
-}
+});
+
+SystemTablesSettings.displayName = 'SystemTablesSettings';
+
+export default SystemTablesSettings;

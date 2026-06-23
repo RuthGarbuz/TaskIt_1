@@ -73,10 +73,10 @@ class AuthService {
 
       this.setToken(data.token);
       const userObject = {
-        id: data.id,
-        email: data.email,
-        username: data.username,
-        dataBase: data.dataBase,
+        id: data.id ?? data.Id,
+        email: data.email ?? data.Email,
+        username: data.username ?? data.Username ?? email,
+        dataBase: data.dataBase ?? data.DataBase,
         urlConnection: data.urlConnection,
         expiresAt: data.expiration,
         seeFinance: data.seeFinance,
@@ -169,15 +169,33 @@ class AuthService {
     const headers = new Headers(options.headers ?? undefined);
     headers.set("Authorization", `Bearer ${token}`);
 
+    const method = (options.method ?? "GET").toUpperCase();
     const hasBody = options.body != null && options.body !== "";
     if (hasBody && !headers.has("Content-Type")) {
       headers.set("Content-Type", "application/json");
     }
+    // No body: avoid Content-Type — ASP.NET returns 415 if JSON Content-Type is sent without a body
+    if (!hasBody) {
+      headers.delete("Content-Type");
+    }
+    if (!headers.has("Accept")) {
+      headers.set("Accept", "application/json");
+    }
 
     try {
       const response = await fetch(url, {
-        ...options,
+        method,
         headers,
+        ...(hasBody ? { body: options.body } : {}),
+        signal: options.signal,
+        cache: options.cache,
+        credentials: options.credentials,
+        redirect: options.redirect,
+        referrer: options.referrer,
+        referrerPolicy: options.referrerPolicy,
+        integrity: options.integrity,
+        keepalive: options.keepalive,
+        mode: options.mode,
       });
 
       if (response.status === 401) {

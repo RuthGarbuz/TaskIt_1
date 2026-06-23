@@ -97,8 +97,8 @@ export default function NotificationsPanel({
       <div
         key={n.id}
         onClick={() => handleRowClick(n)}
-        className={`flex gap-3 px-4 py-3 cursor-pointer transition-colors border-b border-gray-100 hover:bg-blue-50 ${
-          !n.isRead ? 'bg-blue-50 bg-opacity-40' : ''
+        className={`flex gap-3 px-4 py-3 cursor-pointer transition-colors border-b border-gray-100 dark:border-gray-700 hover:bg-blue-50 dark:hover:bg-blue-900/20 ${
+          !n.isRead ? 'bright-surface bg-blue-50 bg-opacity-40' : ''
         }`}
       >
         {/* Avatar */}
@@ -167,7 +167,7 @@ export default function NotificationsPanel({
   return (
     <>
       <div
-        className="bg-white rounded-2xl shadow-2xl flex flex-col border border-gray-200"
+        className="modal-shell dark-surface bg-white dark:bg-gray-800 rounded-2xl shadow-2xl flex flex-col border border-gray-200 dark:border-gray-700"
         style={{ width: '520px', maxHeight: '82vh' }}
       >
         {/* Header */}
@@ -200,17 +200,28 @@ export default function NotificationsPanel({
         </div>
 
         {/* Search + unread toggle */}
-        <div className="flex items-center gap-3 px-4 py-2.5 border-b border-gray-100 bg-white">
-          <div className="flex items-center gap-2 flex-1 bg-gray-50 border border-gray-200 rounded-full px-3 py-1.5">
+        <div className="flex items-center gap-3 px-4 py-2.5 border-b border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800">
+          <div className="flex items-center gap-2 flex-1 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-full px-3 py-1.5">
             <Search size={13} className="text-gray-400 flex-shrink-0" />
             <input
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="חפש לפי שם, פרויקט, נושא..."
-              className="flex-1 bg-transparent text-xs text-gray-600 placeholder-gray-400 outline-none border-none"
+              className="flex-1 bg-transparent text-xs text-gray-600 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none border-none"
               style={{ minWidth: 0 }}
             />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch('')}
+                className="text-gray-400 hover:text-gray-600 flex-shrink-0"
+                title="נקה חיפוש"
+                tabIndex={-1}
+              >
+                <X size={13} />
+              </button>
+            )}
           </div>
           <label className="flex items-center gap-2 cursor-pointer flex-shrink-0">
             <span className="text-xs text-gray-500">לא נקראו</span>

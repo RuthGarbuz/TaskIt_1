@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 260">
+  <defs>
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#2196F3"/>
+      <stop offset="100%" style="stop-color:#1565C0"/>
+    </linearGradient>
+    <linearGradient id="checkGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#43A047"/>
+      <stop offset="100%" style="stop-color:#00BCD4"/>
+    </linearGradient>
+    <linearGradient id="boxBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffffff"/>
+      <stop offset="100%" style="stop-color:#f0f4ff"/>
+    </linearGradient>
+  </defs>
+  <!-- Checkbox -->
+  <rect x="95" y="8" width="150" height="150" rx="26" ry="26"
+        fill="url(#boxBg)" stroke="url(#borderGrad)" stroke-width="11"/>
+  <!-- Checkmark -->
+  <polyline points="118,86 148,118 222,52"
+            fill="none" stroke="url(#checkGrad)" stroke-width="19"
+            stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- PlanIt text -->
+  <text x="170" y="232"
+        font-family="'Arial Black', 'Helvetica Neue', Arial, sans-serif"
+        font-size="54" font-weight="900" text-anchor="middle">
+    <tspan fill="#1565C0">Plan</tspan><tspan fill="#43A047">It</tspan>
+  </text>
+</svg>

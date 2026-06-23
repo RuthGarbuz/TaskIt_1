@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { ListTodo, CheckSquare, Settings, Folder, Star, Search, LogOut, ChevronDown, ChevronLeft, Clock, TrendingUp, PanelLeftClose, PanelLeftOpen, Send, Plus } from 'lucide-react';
+import { ListTodo, CheckSquare, Settings, Folder, Star, LogOut, ChevronDown, ChevronLeft, Clock, TrendingUp, PanelLeftClose, PanelLeftOpen, Send, Plus, CalendarRange } from 'lucide-react';
+import SearchInput from '../pages/shared/SearchInput';
 import type { CurrentView } from '../types/index';
 import type { ProjectBasic } from '../Data/projectInfoData';
 import AddTaskModal from '../pages/tasks/AddTaskModal';
@@ -10,11 +11,28 @@ interface SidebarProps {
   onProjectSelect: (projectId: number, projectName: string) => void;
   onLogout: () => void;
   projects: ProjectBasic[];
+  onReloadProjects?: () => void | Promise<void>;
   permissionId?: number;
   onAddTask?: (task: any) => void;
+  onOpenProjectTopicStep?: (payload: {
+    projectId: number;
+    projectName: string;
+    planningTopicId: number;
+    stageId: number;
+  }) => void;
 }
 
-export default function Sidebar({ currentView, onViewChange, onProjectSelect, onLogout, projects, permissionId, onAddTask }: SidebarProps) {
+export default function Sidebar({
+  currentView,
+  onViewChange,
+  onProjectSelect,
+  onLogout,
+  projects,
+  onReloadProjects,
+  permissionId,
+  onAddTask,
+  onOpenProjectTopicStep,
+}: SidebarProps) {
   const [projectsExpanded, setProjectsExpanded] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [collapsed, setCollapsed] = useState(false);
@@ -26,7 +44,8 @@ export default function Sidebar({ currentView, onViewChange, onProjectSelect, on
     { id: 'allTasks' as CurrentView, label: 'כל המשימות', icon: CheckSquare, permissions: permissionId !== 4 },
     { id: 'hoursReport' as CurrentView, label: 'דיווחי שעות', icon: Clock, permissions: true },
     { id: 'workload' as CurrentView, label: 'עומס עבודה', icon: TrendingUp, permissions: true },
-    { id: 'billTasks' as CurrentView, label: 'חשבונות להגשה', icon: Send, permissions: true },
+    { id: 'billTasks' as CurrentView, label: 'חשבונות להגשה', icon: Send, permissions: permissionId === 1  },
+    { id: 'gantt' as CurrentView, label: 'גאנט שלבים', icon: CalendarRange, permissions: permissionId ===1 },
   ];
 
   const allProjects = projects.filter(p =>
@@ -53,7 +72,12 @@ export default function Sidebar({ currentView, onViewChange, onProjectSelect, on
           {menuItems.filter(item => item.permissions).map((item) => (
             <button
               key={item.id}
-              onClick={() => onViewChange(item.id)}
+              onClick={() => {
+                if ((item as { openAsGantt?: boolean }).openAsGantt) {
+                  sessionStorage.setItem('allTasksInitialViewMode', 'gantt');
+                }
+                onViewChange(item.id);
+              }}
               title={collapsed ? item.label : undefined}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all ${
                 currentView === item.id
@@ -71,7 +95,10 @@ export default function Sidebar({ currentView, onViewChange, onProjectSelect, on
         {!collapsed && (
           <div className="flex-1 overflow-hidden flex flex-col border-t border-gray-700">
             <button
-              onClick={() => setProjectsExpanded(!projectsExpanded)}
+              onClick={() => {
+                setProjectsExpanded(!projectsExpanded);
+                void onReloadProjects?.();
+              }}
               className="flex items-center justify-between px-4 py-3 hover:bg-gray-700 transition-colors"
             >
               <div className="flex items-center gap-2">
@@ -84,14 +111,14 @@ export default function Sidebar({ currentView, onViewChange, onProjectSelect, on
             {projectsExpanded && (
               <div className="flex-1 px-4 pb-4 pt-1 flex flex-col overflow-hidden">
                 <div className="flex flex-col flex-1 min-h-0">
-                  <div className="relative mb-2">
-                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-                    <input
-                      type="text"
+                  <div className="mb-2">
+                    <SearchInput
                       value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onChange={setSearchQuery}
                       placeholder="חפש פרויקט..."
-                      className="w-full bg-gray-700 text-white text-xs px-3 py-2 pl-9 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      iconSize={14}
+                      iconPosition="left"
+                      className="bg-gray-700 text-white text-xs border-0 focus:ring-emerald-500 placeholder-gray-400 py-2"
                     />
                   </div>
 
@@ -143,7 +170,7 @@ export default function Sidebar({ currentView, onViewChange, onProjectSelect, on
           </button>
 
           {!collapsed && (
-            <div className="text-xs text-gray-500 text-center mt-1">TaskIt v1.0</div>
+            <div className="text-xs text-gray-500 text-center mt-1">PlanIt v1.0</div>
           )}
         </div>
       </aside>
@@ -154,6 +181,10 @@ export default function Sidebar({ currentView, onViewChange, onProjectSelect, on
         onClose={() => setShowAddTask(false)}
         onSubmit={(task) => {
           onAddTask?.(task);
+          setShowAddTask(false);
+        }}
+        onOpenProjectTopicStep={(payload) => {
+          onOpenProjectTopicStep?.(payload);
           setShowAddTask(false);
         }}
         projects={projects}

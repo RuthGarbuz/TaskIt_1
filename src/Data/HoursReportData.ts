@@ -211,5 +211,27 @@ export interface HourReportStep {
   id: number;
   name: string;
   isPlanningStep: boolean;
+  /** Optional: when the API returns it, used to filter steps/tasks under a planning subject. */
+  planningSubjectId?: number;
+}
+
+/** Body for `POST /HourReport/planning-hierarchy` — matches server `HourReportProjectQuery`. */
+export interface HourReportPlanningHierarchyQuery {
+  database: string;
+  employeeID: number;
+  projectID: number | null;
+  isClosed?: boolean | null;
+}
+
+/** Planning subject row for hour-report picker (first result set). */
+export interface HourReportPlanningSubject {
+  id: number;
+  name: string;
+}
+
+/** Response from `GetPlanningHierarchyByProjectId` — subjects + flat steps/tasks. */
+export interface PlanningHierarchyByProjectResult {
+  subjects: HourReportPlanningSubject[];
+  items: HourReportStep[];
 }
 

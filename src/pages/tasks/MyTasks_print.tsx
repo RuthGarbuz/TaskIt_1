@@ -17,7 +17,7 @@ import DateFilter from '../shared/DateFilter';
 import SearchableCheckboxFilter from '../shared/SearchableCheckboxFilter';
 import DbFilterModal, { getDefaultDBFilters } from './DbFilterModal';
 import { usePersistedDbFilters } from '../../hooks/usePersistedDbFilters';
-import MyTasksReportModal from './MyTasksReportModal';
+import MyTasksReportModal, { type ReportColumn } from './MyTasksReportModal';
 
 interface MyTasksProps {
   tasks: TaskReview[];
@@ -31,6 +31,25 @@ type ColumnFilterKey = 'isClosed' | 'project' | 'status' | 'urgency' | 'sender' 
 type SortKey = 'subject' | 'name' | 'planningSubjectName' | 'projectName' | 'statusName' | 'urgencyName' | 'senderName' | 'startDate' | 'endDate' | 'workHours' | 'utilizationPercentage';
 type SortDir = 'asc' | 'desc' | null;
 interface SortState { key: SortKey | null; dir: SortDir; }
+
+const MY_TASKS_REPORT_COLUMNS: ReportColumn[] = [
+  { key: 'isClosed', label: 'נבדק', widthPx: 60, widthChars: 8, align: 'center' },
+  { key: 'subject', label: 'תיאור משימה', widthPx: 220, widthChars: 30 },
+  { key: 'hasChat', label: 'Chat', widthPx: 60, widthChars: 8, align: 'center' },
+  { key: 'stageName', label: 'שלב', widthPx: 150, widthChars: 22 },
+  { key: 'planningSubject', label: 'נושא תכנון', widthPx: 160, widthChars: 24 },
+  { key: 'project', label: 'פרויקט', widthPx: 170, widthChars: 24 },
+  { key: 'status', label: 'סטטוס', widthPx: 110, widthChars: 14 },
+  { key: 'urgency', label: 'עדיפות', widthPx: 95, widthChars: 12 },
+  { key: 'sender', label: 'שולח', widthPx: 110, widthChars: 16 },
+  { key: 'startDate', label: 'תאריך התחלה', widthPx: 100, widthChars: 12, align: 'center' },
+  { key: 'endDate', label: 'תאריך סיום', widthPx: 100, widthChars: 12, align: 'center' },
+  { key: 'dependsOnStep', label: 'תלוי שלב/משימה', widthPx: 130, widthChars: 16, align: 'center' },
+  { key: 'workHoursBudget', label: 'תקצוב שעות', widthPx: 150, widthChars: 20 },
+  { key: 'utilization', label: 'אחוז ניצול', widthPx: 100, widthChars: 14, align: 'center' },
+  { key: 'hoursReported', label: 'דיווח שעות', widthPx: 100, widthChars: 14, align: 'center' },
+  { key: 'invoiceIndicator', label: 'אינדקציה לחשבון', widthPx: 120, widthChars: 16, hideInPrint: true, align: 'center' },
+];
 
 function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
   if (!active || !dir) return <ChevronsUpDown size={11} className="text-gray-400" />;
@@ -52,7 +71,7 @@ function SortableTh({ sortKey, label, className, sort, onSort }: {
 
 export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksProps) {
   const [viewMode, setViewMode] = useState<'list' | 'gantt'>('list');
-  const [ganttTimeframe, setGanttTimeframe] = useState<'weekly' | 'monthly'>('weekly');
+  const [ganttTimeframe, setGanttTimeframe] = useState<'weekly' | 'monthly' | 'yearly'>('weekly');
   const [ganttTask, setGanttTask] = useState<TaskReview[]>([]);
   const [showViewModal, setShowViewModal] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
@@ -369,7 +388,7 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
         workHoursBudget: workBudget,
         utilization: `${utilStr}%`,
         hoursReported: reported > 0 ? String(reported) : '-',
-        invoiceNote: '—',
+        invoiceIndicator: '—',
         isClosed: task.isClosed ? 'כן' : 'לא'
       };
     });
@@ -825,7 +844,10 @@ export default function MyTasks({ tasks, onTaskUpdate, onTasksUpdate }: MyTasksP
           isOpen={showReportModal}
           onClose={() => setShowReportModal(false)}
           rows={getReportRows()}
+          columns={MY_TASKS_REPORT_COLUMNS}
           filteredCount={columnFilteredTasks.length}
+          reportTitle="דוח משימות - המשימות שלי"
+          fileBaseName={`my-tasks-report-${new Date().toISOString().slice(0, 10)}`}
           onCopySummary={handleCopySummary}
           onExportJson={handleExportJson}
         />

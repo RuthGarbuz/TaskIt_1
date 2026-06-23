@@ -3,14 +3,21 @@ import type { EmployeeLink, SystemTable, TaskCardSaveOptions, TaskParentDateCasc
 import { useTaskFilters } from '../../hooks/useTaskFilters';
 import { useTaskGrouping } from '../../hooks/useTaskGrouping';
 import TaskControls from './TaskControls';
-import TaskTable from './TaskTable';       
+import TaskTable, { type TaskTableStatusChangeOptions } from './TaskTable';
 import TaskCard from './TaskCard';
 import ViewModal from '../../components/ViewModal';        
 import GanttChart from './GanttChart';
-import { getTaskPriorities, getTaskStatuses, getTasks, updateStatusAsync, updateUrgencyAsync, updateTaskAsync, updateIsClosedAsync, updateNameAsync } from '../../services/taskService';
+import { getTaskPriorities, getTaskStatuses, getTasks, updateStatusAsync, updateUrgencyAsync, updateTaskAsync, updateIsClosedAsync, updateNameAsync, findPlanStepRowInTasks } from '../../services/taskService';
 import DbFilterModal, { getDefaultDBFilters } from './DbFilterModal';
 import type { DBFilters } from '../../Data/tasksData';
 import { usePersistedDbFilters } from '../../hooks/usePersistedDbFilters';
+import {
+  usePersistedSessionState,
+  isTaskListViewMode,
+  isGanttTimeframe,
+  isTasksActiveView,
+} from '../../hooks/usePersistedSessionState';
+import { TASK_GROUP_CARD } from './taskViewTheme';
 import MyTasksReportModal, { type ReportColumn } from './MyTasksReportModal';
 
 interface AllTasksProps {
@@ -33,7 +40,7 @@ const ALL_TASKS_REPORT_COLUMNS: ReportColumn[] = [
   { key: 'receiver', label: 'מקבל', widthPx: 140, widthChars: 20 },
   { key: 'startDate', label: 'תאריך התחלה', widthPx: 100, widthChars: 12, align: 'center' },
   { key: 'endDate', label: 'תאריך סיום', widthPx: 100, widthChars: 12, align: 'center' },
-  { key: 'dependsOnStep', label: 'תלוי בשלב', widthPx: 100, widthChars: 14, align: 'center' },
+  { key: 'dependsOnStep', label: 'תלוי שלב', widthPx: 100, widthChars: 14, align: 'center' },
   { key: 'workHoursBudget', label: 'תקצוב שעות למשימה', widthPx: 150, widthChars: 20 },
   { key: 'utilization', label: 'אחוז ניצול במשימה', widthPx: 130, widthChars: 16, align: 'center' },
   { key: 'invoiceIndicator', label: 'אינדקציה לחשבון', widthPx: 120, widthChars: 16, hideInPrint: true, align: 'center' }
@@ -42,14 +49,14 @@ const ALL_TASKS_REPORT_COLUMNS: ReportColumn[] = [
 export default function AllTasks({ tasks, projectId, onTaskUpdate, onTasksUpdate }: AllTasksProps) {
   const isProjectContext = (projectId ?? 0) > 0;
   const getAllTasksDefaultFilters = () => getDefaultDBFilters([], 'no');
-  const [viewMode, setViewMode] = useState<'list' | 'gantt'>('list');
-  const [ganttTimeframe, setGanttTimeframe] = useState<'weekly' | 'monthly'>('weekly');
+  const [viewMode, setViewMode] = usePersistedSessionState('taskit.ui.allTasks.viewMode', 'list', isTaskListViewMode);
+  const [ganttTimeframe, setGanttTimeframe] = usePersistedSessionState('taskit.ui.allTasks.ganttTimeframe', 'weekly', isGanttTimeframe);
   const [ganttTask, setGanttTask] = useState<TaskReview[]>([]);
-  const [selectedEmployee, setSelectedEmployee] = useState<string>('');
+  const [selectedEmployee, setSelectedEmployee] = usePersistedSessionState('taskit.ui.allTasks.selectedEmployee', '');
   const [showViewModal, setShowViewModal] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
-  const [activeView, setActiveView] = useState<'all' | 'status' | 'urgency' | 'project' | 'date'>('all');
+  const [activeView, setActiveView] = usePersistedSessionState('taskit.ui.allTasks.activeView', 'all', isTasksActiveView);
   const [selectedTask, setSelectedTask] = useState<TaskReview | null>(null);
   const [statuses, setStatuses] = useState<SystemTable[]>([]);
   const [priorities, setPriorities] = useState<SystemTable[]>([]);
@@ -58,14 +65,23 @@ export default function AllTasks({ tasks, projectId, onTaskUpdate, onTasksUpdate
     if (!selectedTask || selectedTask.isPlanningSte) {
       return { planStepListTask: undefined as TaskReview | undefined, tasksInSameStep: undefined as TaskReview[] | undefined };
     }
-    const step = tasks.find(t => t.isPlanningSte && t.id === selectedTask.planningStepID);
+    const stepKey = selectedTask.planningStepID;
+    const step = findPlanStepRowInTasks(tasks, stepKey);
     if (!step) {
       return { planStepListTask: undefined as TaskReview | undefined, tasksInSameStep: undefined as TaskReview[] | undefined };
     }
-    const same = tasks.filter(t => !t.isPlanningSte && t.planningStepID === selectedTask.planningStepID);
+    const same = tasks.filter(t => !t.isPlanningSte && t.planningStepID === stepKey);
     return { planStepListTask: step, tasksInSameStep: same };
   }, [selectedTask, tasks]);
   const [dbFilters, setDbFilters] = usePersistedDbFilters('taskit.dbFilters.allTasks', getAllTasksDefaultFilters);
+
+  useEffect(() => {
+    const requestedMode = sessionStorage.getItem('allTasksInitialViewMode');
+    if (requestedMode === 'gantt') {
+      setViewMode('gantt');
+      sessionStorage.removeItem('allTasksInitialViewMode');
+    }
+  }, []);
 
   const {
     searchQuery,
@@ -133,6 +149,11 @@ export default function AllTasks({ tasks, projectId, onTaskUpdate, onTasksUpdate
     }
   };
 
+  const reloadPageTasks = async () => {
+    await loadTasks(true, dbFilters);
+    if (viewMode === 'gantt') await loadGanttTasks(true, dbFilters);
+  };
+
   useEffect(() => {
     let isMounted = true;
 
@@ -177,7 +198,7 @@ export default function AllTasks({ tasks, projectId, onTaskUpdate, onTasksUpdate
 
     loadTasks(isMounted, dbFilters);
 
-    const intervalId = window.setInterval(() => loadTasks(true, dbFilters), 45000);
+    const intervalId = window.setInterval(() => loadTasks(true, dbFilters), 60000);
 
     return () => {
       isMounted = false;
@@ -195,7 +216,7 @@ export default function AllTasks({ tasks, projectId, onTaskUpdate, onTasksUpdate
     }
 
     loadGanttTasks(isMounted, dbFilters);
-    const intervalId = window.setInterval(() => loadGanttTasks(true, dbFilters), 45000);
+    const intervalId = window.setInterval(() => loadGanttTasks(true, dbFilters), 60000);
 
     return () => {
       isMounted = false;
@@ -216,16 +237,40 @@ export default function AllTasks({ tasks, projectId, onTaskUpdate, onTasksUpdate
     onTasksUpdate(updatedTasks);
   };
 
-  const handleTaskStatusChange = async (taskId: number, statusId: number, statusName: string) => {
-    const isTask = tasks.find((task) => task.id === taskId)?.isPlanningSte ?? false;
-    
-    await updateStatusAsync(taskId, statusId, !isTask,true);
+  const handleTaskStatusChange = async (
+    taskId: number,
+    statusId: number,
+    statusName: string,
+    options?: TaskTableStatusChangeOptions,
+  ) => {
+    const task = tasks.find(t => t.id === taskId);
+    const isPlanningStep = task?.isPlanningSte ?? false;
 
-    const updatedTasks = tasks.map(task =>
-      task.id === taskId
-        ? { ...task, statuID: statusId, statusName, isClosed: statusName === 'הושלם' }
-        : task
+    await updateStatusAsync(taskId, statusId, !isPlanningStep, true, options?.updateAllEmployees ?? false);
+
+    let updatedTasks = tasks.map(t =>
+      t.id === taskId
+        ? { ...t, statuID: statusId, statusName, isClosed: statusId === 3 || statusName === 'הושלם' }
+        : t,
     );
+
+    const cascade = options?.statusCascade;
+    if (cascade?.childTaskUpdates?.length) {
+      for (const child of cascade.childTaskUpdates) {
+        await updateStatusAsync(child.id, child.statuID, true, true, cascade.syncChildEmployees);
+      }
+      updatedTasks = updatedTasks.map(t => {
+        const childUpdate = cascade.childTaskUpdates.find(c => c.id === t.id);
+        if (!childUpdate) return t;
+        return {
+          ...t,
+          statuID: childUpdate.statuID,
+          statusName: childUpdate.statusName,
+          isClosed: childUpdate.statuID === 3 || childUpdate.statusName === 'הושלם',
+        };
+      });
+    }
+
     onTasksUpdate(updatedTasks);
   };
 
@@ -351,11 +396,11 @@ export default function AllTasks({ tasks, projectId, onTaskUpdate, onTasksUpdate
       return t;
     });
 
-  const ymd = (v?: string | null) => {
-    if (v == null || v === '') return '';
-    const d = new Date(v);
-    return Number.isNaN(d.getTime()) ? String(v) : d.toISOString().slice(0, 10);
-  };
+  // const ymd = (v?: string | null) => {
+  //   if (v == null || v === '') return '';
+  //   const d = new Date(v);
+  //   return Number.isNaN(d.getTime()) ? String(v) : d.toISOString().slice(0, 10);
+  // };
 
   const handleTaskUpdateFromCard = async (
     updatedTask: TaskReview,
@@ -364,6 +409,11 @@ export default function AllTasks({ tasks, projectId, onTaskUpdate, onTasksUpdate
   ) => {
     const stepCascade = options?.taskStepHoursCascade;
     const pdc = options?.taskParentDateCascade;
+    const currentTask = tasks.find(t => t.id === updatedTask.id);
+    const isTask = currentTask?.isPlanningSte ?? false;
+
+    if (currentTask && currentTask.isClosed !== updatedTask.isClosed)
+      await updateIsClosedAsync(updatedTask.id, updatedTask.isClosed ?? false, !isTask);
 
     if (stepCascade) {
       const c = stepCascade;
@@ -372,14 +422,14 @@ export default function AllTasks({ tasks, projectId, onTaskUpdate, onTasksUpdate
         const patch: TaskUpdatePatch = isCurrent
           ? { ...buildChanges(updatedTask), workHours: tu.workHours, workDays: tu.workDays, percentage: tu.percentage }
           : { id: tu.id, workHours: tu.workHours, workDays: tu.workDays, percentage: tu.percentage };
-        await updateTaskAsync(patch, isCurrent ? employeeLinks : [], true);
+        await updateTaskAsync(patch, isCurrent ? employeeLinks : [], true,true);
       }
       const pdcForStep = pdc && pdc.stepId === c.stepId ? pdc : undefined;
       for (const o of pdcForStep?.otherTaskDateUpdates ?? []) {
         await updateTaskAsync(
           { id: o.id, startDate: o.startDate, endDate: o.endDate, duration: o.duration },
           [],
-          true
+          true,true
         );
       }
       const stepPatch: TaskUpdatePatch = { id: c.stepId };
@@ -394,10 +444,11 @@ export default function AllTasks({ tasks, projectId, onTaskUpdate, onTasksUpdate
         if (pdcForStep.workDays != null) stepPatch.workDays = pdcForStep.workDays;
       }
       if (Object.keys(stepPatch).length > 1) {
-        await updateTaskAsync(stepPatch, [], false);
+        await updateTaskAsync(stepPatch, [], false,true);
       }
       onTasksUpdate(applyTasksLocal(c, updatedTask, pdcForStep));
       onTaskUpdate(updatedTask);
+      await reloadPageTasks();
       return;
     }
 
@@ -405,13 +456,13 @@ export default function AllTasks({ tasks, projectId, onTaskUpdate, onTasksUpdate
       const changes = buildChanges(updatedTask);
       const hasT = Object.keys(changes).length > 1;
       if (hasT || !employeeLinks.every(l => !l.isModified && !l.isNew && !l.isDeleted)) {
-        await updateTaskAsync(changes, employeeLinks, true);
+        await updateTaskAsync(changes, employeeLinks, true,true);
       }
       for (const o of pdc.otherTaskDateUpdates ?? []) {
         await updateTaskAsync(
           { id: o.id, startDate: o.startDate, endDate: o.endDate, duration: o.duration },
           [],
-          true
+          true,true
         );
       }
       if (
@@ -427,29 +478,49 @@ export default function AllTasks({ tasks, projectId, onTaskUpdate, onTasksUpdate
             ...(pdc.workDays != null ? { workDays: pdc.workDays } : {})
           },
           [],
-          false
+          false,true
         );
       }
       onTasksUpdate(applyParentDateLocal(pdc, updatedTask));
       onTaskUpdate(updatedTask);
+      await reloadPageTasks();
       return;
     }
 
     const changes = buildChanges(updatedTask);
     const hasChanges = Object.keys(changes).length > 1; // id + something
-    if (!hasChanges && employeeLinks.every(l => !l.isModified && !l.isNew && !l.isDeleted) && !options?.cascadeStage && !options?.taskStepHoursCascade && !options?.taskParentDateCascade) {
+    if (!hasChanges && employeeLinks.every(l => !l.isModified && !l.isNew && !l.isDeleted) && !options?.cascadeStage && !options?.taskStepHoursCascade && !options?.taskParentDateCascade && !options?.statusCascade) {
       return;
     }
 
-    const isTask = updatedTask.isPlanningSte ?? false;
-    await updateTaskAsync(changes, employeeLinks, !isTask);
+    await updateTaskAsync(changes, employeeLinks, !isTask,true);
+
+    if (options?.statusCascade) {
+      const sc = options.statusCascade;
+      for (const child of sc.childTaskUpdates) {
+        await updateStatusAsync(child.id, child.statuID, true, true, sc.syncChildEmployees);
+      }
+      onTasksUpdate(
+        tasks.map(t => {
+          if (t.id === updatedTask.id) return { ...updatedTask };
+          const cu = sc.childTaskUpdates.find(c => c.id === t.id);
+          if (cu) {
+            return { ...t, statuID: cu.statuID, statusName: cu.statusName, isClosed: cu.statusName === 'הושלם' };
+          }
+          return t;
+        })
+      );
+      onTaskUpdate(updatedTask);
+      await reloadPageTasks();
+      return;
+    }
 
     if (options?.cascadeStage) {
       const c = options.cascadeStage;
       await updateTaskAsync(
         { id: c.id, startDate: c.startDate, endDate: c.endDate },
         [],
-        false
+        false,true
       );
       onTasksUpdate(
         tasks.map(t => {
@@ -461,6 +532,7 @@ export default function AllTasks({ tasks, projectId, onTaskUpdate, onTasksUpdate
     }
 
     onTaskUpdate(updatedTask);
+    await reloadPageTasks();
   };
 
   const formatDateCell = (value?: string | null) => (value ? new Date(value).toLocaleDateString('en-GB') : '-');
@@ -558,7 +630,7 @@ export default function AllTasks({ tasks, projectId, onTaskUpdate, onTasksUpdate
       {viewMode === 'list' ? (
         <div className="space-y-6">
           {Object.entries(groupedTasks).map(([groupName, groupTasks]) => (
-            <div key={groupName} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
+            <div key={groupName} className={TASK_GROUP_CARD}>
             {activeView !== 'all' && (
             <div className={`px-6 py-3 flex items-center justify-between ${
               activeView === 'urgency' ? 'bg-gradient-to-r from-amber-400 to-orange-400' :
@@ -595,11 +667,11 @@ export default function AllTasks({ tasks, projectId, onTaskUpdate, onTasksUpdate
             <ul className="space-y-2">
               <li className="flex items-start gap-2 text-sm text-amber-800">
                 <span className="text-amber-500 mt-0.5">•</span>
-                <span>רשימת המשימות שאני מורשה לראות</span>
+                <span><span className="font-bold">הרשאות צפייה:</span> בבורד זה יוצגו אך ורק המשימות שהמשתמש מורשה לראות (בהתאם לרמת ההרשאה שלו במערכת) לדוגמה רשימת המשימות של הצוות שלי.</span>
               </li>
               <li className="flex items-start gap-2 text-sm text-amber-800">
                 <span className="text-amber-500 mt-0.5">•</span>
-                <span>אפשר לשנות תצוגה לרשימה, לקבץ לפי קטגוריה, עדיפות ועוד</span>
+                <span><span className="font-bold">ניהול תצוגה וחיתוכים:</span> ניתן לשנות את תצוגת הבורד לרשימה/גאנט, וכן לקבץ ולסנן את המשימות לפי קטגוריה, רמת עדיפות או חתכים נוספים.</span>
               </li>
             </ul>
           </div>
@@ -611,10 +683,10 @@ export default function AllTasks({ tasks, projectId, onTaskUpdate, onTasksUpdate
             currentView="allTasks"
             statuses={statuses}
             priorities={priorities}
-            onUpdate={(updatedTask, employeeLinks, options) => {
-              void handleTaskUpdateFromCard(updatedTask, employeeLinks, options);
+            onUpdate={async (updatedTask, employeeLinks, options) => {
+              await handleTaskUpdateFromCard(updatedTask, employeeLinks, options);
               setSelectedTask(null);
-            } } viewMode={'allTasks'}      //onTaskUpdate={onTaskUpdate}
+            }} viewMode={'allTasks'}      //onTaskUpdate={onTaskUpdate}
     //  onTasksUpdate={onTasksUpdate}
                 />
       )}
@@ -623,8 +695,8 @@ export default function AllTasks({ tasks, projectId, onTaskUpdate, onTasksUpdate
         <TaskCard 
           task={selectedTask} 
           onClose={() => setSelectedTask(null)}
-          onUpdate={(updatedTask, employeeLinks, options) => {
-            void handleTaskUpdateFromCard(updatedTask, employeeLinks, options);
+          onUpdate={async (updatedTask, employeeLinks, options) => {
+            await handleTaskUpdateFromCard(updatedTask, employeeLinks, options);
             setSelectedTask(null);
           }}
           viewMode="allTasks"
@@ -632,6 +704,7 @@ export default function AllTasks({ tasks, projectId, onTaskUpdate, onTasksUpdate
           priorities={priorities}
           planStepListTask={taskCardStepContext.planStepListTask}
           tasksInSameStep={taskCardStepContext.tasksInSameStep}
+          contextTasks={tasks}
         />
       )}
 

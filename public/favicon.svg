@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#2196F3"/>
+      <stop offset="100%" style="stop-color:#1565C0"/>
+    </linearGradient>
+    <linearGradient id="checkGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#43A047"/>
+      <stop offset="100%" style="stop-color:#00BCD4"/>
+    </linearGradient>
+  </defs>
+  <rect x="6" y="6" width="88" height="88" rx="18" ry="18"
+        fill="white" stroke="url(#borderGrad)" stroke-width="7"/>
+  <polyline points="20,54 42,76 80,28"
+            fill="none" stroke="url(#checkGrad)" stroke-width="11"
+            stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

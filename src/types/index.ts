@@ -38,4 +38,5 @@ export type CurrentView =
   | 'workload'
   | 'settings'
   | 'projects'
-  | 'billTasks';
+  | 'billTasks'
+   |  'gantt';
